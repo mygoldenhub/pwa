@@ -148,6 +148,14 @@ class DarkModeColors {
   static const darkInversePrimary = Color(0xFF5B7C99);
 }
 
+/// Brand/semantic colors that are used across multiple screens.
+///
+/// Keep these in theme to avoid hardcoding colors inside widgets.
+class AppSemanticColors {
+  static const Color success = Colors.teal;
+  static const Color onSuccess = Colors.white;
+}
+
 /// Font size constants
 class FontSizes {
   static const double displayLarge = 57.0;
