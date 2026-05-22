@@ -16,6 +16,11 @@ class WelcomePage extends StatelessWidget {
   static const String _bgAssetMobile = 'assets/images/mobile-file.png';
   static const String _bgAssetWebDesktop = 'assets/images/web-file.png';
 
+  // When running on the web, `defaultTargetPlatform` is not always enough
+  // (some mobile browsers can report desktop-ish platforms, and users can
+  // resize the window). So we also use a simple responsive breakpoint.
+  static const double _mobileBreakpointWidth = 650;
+
   static bool _isMobilePlatform() {
     // When running on Web, defaultTargetPlatform reflects the browser platform
     // (Android/iOS for mobile browsers, macOS/windows/linux for desktop).
@@ -31,7 +36,17 @@ class WelcomePage extends StatelessWidget {
     }
   }
 
-  static String _resolveBackgroundAsset() => _isMobilePlatform() ? _bgAssetMobile : _bgAssetWebDesktop;
+  static String _resolveBackgroundAsset(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width;
+    final isMobileLayout = width <= _mobileBreakpointWidth;
+    // Priority:
+    // 1) Native mobile platforms should always use the mobile image.
+    // 2) On web, use the mobile image for mobile-sized viewports (phones).
+    // 3) Otherwise, use the desktop image.
+    if (_isMobilePlatform()) return _bgAssetMobile;
+    if (kIsWeb && isMobileLayout) return _bgAssetMobile;
+    return _bgAssetWebDesktop;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -42,7 +57,7 @@ class WelcomePage extends StatelessWidget {
         children: [
           Positioned.fill(
             child: Image.asset(
-              _resolveBackgroundAsset(),
+              _resolveBackgroundAsset(context),
               fit: BoxFit.cover,
               errorBuilder: (context, error, stackTrace) {
                 debugPrint('WelcomePage background asset missing. Error: $error');
