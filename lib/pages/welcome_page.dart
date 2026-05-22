@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'dart:ui' show ImageFilter;
 import 'package:go_router/go_router.dart';
 import 'package:pwa/nav.dart';
 import 'package:pwa/theme.dart';
@@ -7,9 +8,30 @@ import 'package:pwa/theme.dart';
 class WelcomePage extends StatelessWidget {
   const WelcomePage({super.key});
 
-  // IMPORTANT: This must exist under your project's Assets panel.
-  // Upload the file to: assets/images/
-  static const String _bgAsset = 'assets/images/94515d5c-1758-4066-a026-5f96a44abfd7.png';
+  // IMPORTANT: These must exist under your project's Assets panel.
+  // Upload the files to: assets/images/
+  //
+  // - Mobile: used for Android/iOS (and for mobile browsers on Flutter web)
+  // - Web (desktop): used for desktop browsers on Flutter web
+  static const String _bgAssetMobile = 'assets/images/mobile-file.png';
+  static const String _bgAssetWebDesktop = 'assets/images/web-file.png';
+
+  static bool _isMobilePlatform() {
+    // When running on Web, defaultTargetPlatform reflects the browser platform
+    // (Android/iOS for mobile browsers, macOS/windows/linux for desktop).
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+      case TargetPlatform.iOS:
+        return true;
+      case TargetPlatform.fuchsia:
+      case TargetPlatform.linux:
+      case TargetPlatform.macOS:
+      case TargetPlatform.windows:
+        return false;
+    }
+  }
+
+  static String _resolveBackgroundAsset() => _isMobilePlatform() ? _bgAssetMobile : _bgAssetWebDesktop;
 
   @override
   Widget build(BuildContext context) {
@@ -20,10 +42,10 @@ class WelcomePage extends StatelessWidget {
         children: [
           Positioned.fill(
             child: Image.asset(
-              _bgAsset,
+              _resolveBackgroundAsset(),
               fit: BoxFit.cover,
               errorBuilder: (context, error, stackTrace) {
-                debugPrint('WelcomePage background asset missing: $_bgAsset. Error: $error');
+                debugPrint('WelcomePage background asset missing. Error: $error');
                 // Keeps the screen usable even if the asset isn't added yet.
                 return DecoratedBox(
                   decoration: BoxDecoration(
@@ -58,27 +80,41 @@ class WelcomePage extends StatelessWidget {
                 constraints: const BoxConstraints(maxWidth: 520),
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.lg, AppSpacing.lg, AppSpacing.xl),
-                  child: Column(
-                    children: [
-                      const SizedBox(height: AppSpacing.sm),
-                      const _WelcomeBrandHeader(),
-                      const Spacer(),
-                      TweenAnimationBuilder<double>(
-                        tween: Tween(begin: 0.0, end: 1.0),
-                        duration: const Duration(milliseconds: 520),
-                        curve: Curves.easeOutCubic,
-                        builder: (context, t, child) {
-                          return Transform.translate(
-                            offset: Offset(0, 16 * (1 - t)),
-                            child: Opacity(opacity: t, child: child),
-                          );
-                        },
-                        child: _WelcomeCard(
-                          onExistingAccount: () => context.go(AppRoutes.login),
-                          onCreateAccount: () => context.go(AppRoutes.register),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      // Keep the "modal" centered, but allow scrolling on smaller screens.
+                      return SingleChildScrollView(
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                          child: IntrinsicHeight(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const SizedBox(height: AppSpacing.sm),
+                                const _WelcomeBrandHeader(),
+                                const SizedBox(height: AppSpacing.xl),
+                                TweenAnimationBuilder<double>(
+                                  tween: Tween(begin: 0.0, end: 1.0),
+                                  duration: const Duration(milliseconds: 520),
+                                  curve: Curves.easeOutCubic,
+                                  builder: (context, t, child) {
+                                    return Transform.translate(
+                                      offset: Offset(0, 16 * (1 - t)),
+                                      child: Opacity(opacity: t, child: child),
+                                    );
+                                  },
+                                  child: _WelcomeCard(
+                                    onExistingAccount: () => context.go(AppRoutes.login),
+                                    onCreateAccount: () => context.go(AppRoutes.register),
+                                  ),
+                                ),
+                                const SizedBox(height: AppSpacing.lg),
+                              ],
+                            ),
+                          ),
                         ),
-                      ),
-                    ],
+                      );
+                    },
                   ),
                 ),
               ),
@@ -227,69 +263,78 @@ class _WelcomeCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
 
-    return Container(
-      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.xl, AppSpacing.lg, AppSpacing.lg),
-      decoration: BoxDecoration(
-        color: cs.surface,
-        borderRadius: BorderRadius.circular(AppRadius.xl),
-        border: Border.all(color: cs.outline.withValues(alpha: 0.14)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('Welcome!', style: Theme.of(context).textTheme.headlineSmall?.semiBold, textAlign: TextAlign.center),
-          const SizedBox(height: AppSpacing.xs),
-          Text(
-            'Access your trade account\nor create a new one to start shopping.',
-            style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
-            textAlign: TextAlign.center,
+    // Frosted/transparent white modal.
+    // Uses BackdropFilter for blur + semi-transparent surface tint.
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(AppRadius.xl),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.xl, AppSpacing.lg, AppSpacing.lg),
+          decoration: BoxDecoration(
+            // A white-ish surface with opacity so the background subtly shows through.
+            color: cs.surface.withValues(alpha: 0.86),
+            borderRadius: BorderRadius.circular(AppRadius.xl),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
           ),
-          const SizedBox(height: AppSpacing.lg),
-          FilledButton.icon(
-            onPressed: onExistingAccount,
-            icon: Icon(Icons.person, color: cs.onPrimary),
-            label: Text('Existing Trade Account', style: TextStyle(color: cs.onPrimary)),
-            style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16)),
-          ),
-          const SizedBox(height: AppSpacing.xs),
-          Text(
-            'Sign in to access your account and shop.',
-            style: Theme.of(context).textTheme.bodySmall?.withColor(cs.onSurfaceVariant),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: AppSpacing.md),
-          const _OrDivider(),
-          const SizedBox(height: AppSpacing.md),
-          OutlinedButton.icon(
-            onPressed: onCreateAccount,
-            icon: Icon(Icons.person_add_alt_1, color: AppSemanticColors.success),
-            label: Text('New Customer / Create Account', style: const TextStyle(color: AppSemanticColors.success)),
-            style: OutlinedButton.styleFrom(
-              side: BorderSide(color: AppSemanticColors.success.withValues(alpha: 0.55)),
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-            ),
-          ),
-          const SizedBox(height: AppSpacing.xs),
-          Text(
-            'Create a new account to get started.',
-            style: Theme.of(context).textTheme.bodySmall?.withColor(cs.onSurfaceVariant),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: AppSpacing.md),
-          Center(
-            child: Wrap(
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                Text('Need help? ', style: Theme.of(context).textTheme.bodySmall?.withColor(cs.onSurfaceVariant)),
-                TextButton(
-                  onPressed: () {},
-                  child: Text('Contact support', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: cs.primary)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Welcome!', style: Theme.of(context).textTheme.headlineSmall?.semiBold, textAlign: TextAlign.center),
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                'Access your trade account\nor create a new one to start shopping.',
+                style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              FilledButton.icon(
+                onPressed: onExistingAccount,
+                icon: Icon(Icons.person, color: cs.onPrimary),
+                label: Text('Existing Trade Account', style: TextStyle(color: cs.onPrimary)),
+                style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16)),
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                'Sign in to access your account and shop.',
+                style: Theme.of(context).textTheme.bodySmall?.withColor(cs.onSurfaceVariant),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: AppSpacing.md),
+              const _OrDivider(),
+              const SizedBox(height: AppSpacing.md),
+              OutlinedButton.icon(
+                onPressed: onCreateAccount,
+                icon: Icon(Icons.person_add_alt_1, color: AppSemanticColors.success),
+                label: Text('New Customer / Create Account', style: const TextStyle(color: AppSemanticColors.success)),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: AppSemanticColors.success.withValues(alpha: 0.55)),
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                'Create a new account to get started.',
+                style: Theme.of(context).textTheme.bodySmall?.withColor(cs.onSurfaceVariant),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: AppSpacing.md),
+              Center(
+                child: Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text('Need help? ', style: Theme.of(context).textTheme.bodySmall?.withColor(cs.onSurfaceVariant)),
+                    TextButton(
+                      onPressed: () {},
+                      child: Text('Contact support', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: cs.primary)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

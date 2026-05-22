@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-class AppSpacing {
+class AppSpacing {   
   // Spacing values
   static const double xs = 4.0;
   static const double sm = 8.0;
