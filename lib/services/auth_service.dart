@@ -182,7 +182,7 @@ class AuthService extends ChangeNotifier {
       final normalized = email.trim();
       if (normalized.isEmpty || !normalized.contains('@')) throw Exception('Please enter a valid email.');
       final token = code.trim();
-      if (token.length != 8 || token.contains(RegExp(r'\D'))) throw Exception('Please enter the 8-digit code.');
+      if (token.length != 6 || token.contains(RegExp(r'\D'))) throw Exception('Please enter the 6-digit code.');
       _validatePasswordOrThrow(password);
 
       final res = await SupabaseConfig.auth.verifyOTP(

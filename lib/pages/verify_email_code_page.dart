@@ -28,7 +28,7 @@ class VerifyEmailCodePage extends StatefulWidget {
 }
 
 class _VerifyEmailCodePageState extends State<VerifyEmailCodePage> {
-  static const int _digits = 8;
+  static const int _digits = 6;
   static const Duration _cooldown = Duration(seconds: 45);
 
   late final List<TextEditingController> _controllers;
