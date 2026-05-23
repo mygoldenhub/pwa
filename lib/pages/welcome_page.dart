@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:ui' show ImageFilter;
 import 'package:go_router/go_router.dart';
+import 'package:pwa/components/app_logo.dart';
 import 'package:pwa/nav.dart';
 import 'package:pwa/theme.dart';
 
@@ -160,15 +161,33 @@ class _WelcomeBrandHeader extends StatelessWidget {
       },
       child: Column(
         children: [
-          const _TileTradeMark(),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(26),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+            ),
+            child: const Padding(
+              padding: EdgeInsets.all(10),
+              child: AppLogo(size: 130, borderRadius: BorderRadius.all(Radius.circular(20))),
+            ),
+          ),
           const SizedBox(height: AppSpacing.sm),
-          Text('Scan & Go', style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: Colors.white)),
+          Text(
+            'Scan & Go',
+            style: Theme.of(context).textTheme.displaySmall?.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+              height: 1.05,
+            ),
+          ),
           const SizedBox(height: AppSpacing.xs),
           Text(
             'STAFFLESS STORE',
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
               color: Colors.white.withValues(alpha: 0.80),
-              letterSpacing: 1.2,
+              letterSpacing: 1.6,
+              fontWeight: FontWeight.w700,
             ),
           ),
           const SizedBox(height: AppSpacing.xs),
@@ -182,88 +201,6 @@ class _WelcomeBrandHeader extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _TileTradeMark extends StatelessWidget {
-  const _TileTradeMark();
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final onDark = Colors.white;
-
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Container(
-          width: 54,
-          height: 54,
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.10),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
-          ),
-          child: const _FourTiles(),
-        ),
-        const SizedBox(width: AppSpacing.md),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('TILE TRADE', style: Theme.of(context).textTheme.titleLarge?.copyWith(color: onDark, letterSpacing: 0.6)),
-            const SizedBox(height: 2),
-            Text(
-              'STAFFLESS STORE',
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: onDark.withValues(alpha: 0.75),
-                letterSpacing: 1.1,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(width: 2),
-        Icon(Icons.qr_code_scanner, color: cs.primary.withValues(alpha: 0.95), size: 22),
-      ],
-    );
-  }
-}
-
-class _FourTiles extends StatelessWidget {
-  const _FourTiles();
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final gap = 6.0;
-        final size = (constraints.maxWidth - gap) / 2;
-
-        return Wrap(
-          spacing: gap,
-          runSpacing: gap,
-          children: [
-            SizedBox(width: size, height: size, child: _MarkTile(color: Colors.white)),
-            SizedBox(width: size, height: size, child: _MarkTile(color: Colors.white)),
-            SizedBox(width: size, height: size, child: _MarkTile(color: cs.primary.withValues(alpha: 0.95))),
-            SizedBox(width: size, height: size, child: _MarkTile(color: cs.primary.withValues(alpha: 0.95))),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _MarkTile extends StatelessWidget {
-  final Color color;
-  const _MarkTile({required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(6)),
     );
   }
 }
@@ -296,24 +233,24 @@ class _WelcomeCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('Welcome!', style: Theme.of(context).textTheme.headlineSmall?.semiBold, textAlign: TextAlign.center),
+              Text('Welcome!', style: Theme.of(context).textTheme.headlineMedium?.semiBold, textAlign: TextAlign.center),
               const SizedBox(height: AppSpacing.xs),
               Text(
                 'Access your trade account\nor create a new one to start shopping.',
-                style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
+                style: Theme.of(context).textTheme.bodyLarge?.withColor(cs.onSurfaceVariant),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: AppSpacing.lg),
               FilledButton.icon(
                 onPressed: onExistingAccount,
                 icon: Icon(Icons.person, color: cs.onPrimary),
-                label: Text('Existing Trade Account', style: TextStyle(color: cs.onPrimary)),
+                label: Text('Existing Trade Account', style: Theme.of(context).textTheme.labelLarge?.copyWith(color: cs.onPrimary)),
                 style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16)),
               ),
               const SizedBox(height: AppSpacing.xs),
               Text(
                 'Sign in to access your account and shop.',
-                style: Theme.of(context).textTheme.bodySmall?.withColor(cs.onSurfaceVariant),
+                style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: AppSpacing.md),
@@ -322,7 +259,10 @@ class _WelcomeCard extends StatelessWidget {
               OutlinedButton.icon(
                 onPressed: onCreateAccount,
                 icon: Icon(Icons.person_add_alt_1, color: AppSemanticColors.success),
-                label: Text('New Customer / Create Account', style: const TextStyle(color: AppSemanticColors.success)),
+                label: Text(
+                  'New Customer / Create Account',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(color: AppSemanticColors.success),
+                ),
                 style: OutlinedButton.styleFrom(
                   side: BorderSide(color: AppSemanticColors.success.withValues(alpha: 0.55)),
                   padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
@@ -331,7 +271,7 @@ class _WelcomeCard extends StatelessWidget {
               const SizedBox(height: AppSpacing.xs),
               Text(
                 'Create a new account to get started.',
-                style: Theme.of(context).textTheme.bodySmall?.withColor(cs.onSurfaceVariant),
+                style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: AppSpacing.md),
@@ -339,10 +279,10 @@ class _WelcomeCard extends StatelessWidget {
                 child: Wrap(
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    Text('Need help? ', style: Theme.of(context).textTheme.bodySmall?.withColor(cs.onSurfaceVariant)),
+                    Text('Need help? ', style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant)),
                     TextButton(
                       onPressed: () {},
-                      child: Text('Contact support', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: cs.primary)),
+                      child: Text('Contact support', style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: cs.primary)),
                     ),
                   ],
                 ),
@@ -361,7 +301,7 @@ class _OrDivider extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final style = Theme.of(context).textTheme.labelSmall?.withColor(cs.onSurfaceVariant);
+    final style = Theme.of(context).textTheme.labelMedium?.withColor(cs.onSurfaceVariant);
 
     return Row(
       children: [

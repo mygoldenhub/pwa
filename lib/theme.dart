@@ -156,6 +156,14 @@ class AppSemanticColors {
   static const Color onSuccess = Colors.white;
 }
 
+/// Central place for app asset paths.
+///
+/// Note: The actual image file must exist under `assets/images/` in the Assets
+/// panel for Flutter to load it.
+class AppAssets {
+  static const String logo = 'assets/images/03c69dd3-b418-42c0-97a5-9bdcc1c0f979.jpg';
+}
+
 /// Font size constants
 class FontSizes {
   static const double displayLarge = 57.0;
@@ -165,14 +173,14 @@ class FontSizes {
   static const double headlineMedium = 28.0;
   static const double headlineSmall = 24.0;
   static const double titleLarge = 22.0;
-  static const double titleMedium = 16.0;
-  static const double titleSmall = 14.0;
-  static const double labelLarge = 14.0;
-  static const double labelMedium = 12.0;
-  static const double labelSmall = 11.0;
-  static const double bodyLarge = 16.0;
-  static const double bodyMedium = 14.0;
-  static const double bodySmall = 12.0;
+  static const double titleMedium = 18.0;
+  static const double titleSmall = 15.0;
+  static const double labelLarge = 15.0;
+  static const double labelMedium = 13.0;
+  static const double labelSmall = 12.0;
+  static const double bodyLarge = 17.0;
+  static const double bodyMedium = 15.0;
+  static const double bodySmall = 13.0;
 }
 
 // =============================================================================
@@ -378,16 +386,19 @@ TextTheme _buildTextTheme(Brightness brightness) {
       fontSize: FontSizes.bodyLarge,
       fontWeight: FontWeight.w400,
       letterSpacing: 0.15,
+      height: 1.45,
     ),
     bodyMedium: GoogleFonts.inter(
       fontSize: FontSizes.bodyMedium,
       fontWeight: FontWeight.w400,
       letterSpacing: 0.25,
+      height: 1.45,
     ),
     bodySmall: GoogleFonts.inter(
       fontSize: FontSizes.bodySmall,
       fontWeight: FontWeight.w400,
       letterSpacing: 0.4,
+      height: 1.45,
     ),
   );
 }

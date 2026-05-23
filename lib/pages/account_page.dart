@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/app_state.dart';
+import 'package:pwa/components/app_logo.dart';
 import 'package:pwa/nav.dart';
 import 'package:pwa/theme.dart';
 
@@ -14,7 +15,14 @@ class AccountPage extends StatelessWidget {
     final user = appState.auth.currentUser;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Account')),
+      appBar: AppBar(
+        leading: const Padding(
+          padding: EdgeInsets.only(left: 12),
+          child: Center(child: AppLogo(size: 30, borderRadius: BorderRadius.all(Radius.circular(10)))),
+        ),
+        leadingWidth: 54,
+        title: const Text('Account'),
+      ),
       body: SafeArea(
         child: Padding(
           padding: AppSpacing.paddingLg,

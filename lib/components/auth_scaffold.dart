@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:pwa/components/app_logo.dart';
 import 'package:pwa/nav.dart';
 import 'package:pwa/theme.dart';
 
@@ -15,6 +16,7 @@ class AuthScaffold extends StatelessWidget {
   final String? subtitle;
   final IconData icon;
   final Widget child;
+  final bool showLogo;
   final bool showBack;
   final VoidCallback? onBack;
   final EdgeInsetsGeometry? padding;
@@ -25,6 +27,7 @@ class AuthScaffold extends StatelessWidget {
     required this.icon,
     required this.child,
     this.subtitle,
+    this.showLogo = true,
     this.showBack = false,
     this.onBack,
     this.padding,
@@ -117,13 +120,15 @@ class AuthScaffold extends StatelessWidget {
                               height: 52,
                               decoration: BoxDecoration(
                                 borderRadius: BorderRadius.circular(AppRadius.xl),
-                                gradient: LinearGradient(
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                  colors: [cs.primary, cs.tertiary],
-                                ),
+                                color: cs.surfaceContainerHighest,
+                                border: Border.all(color: cs.outline.withValues(alpha: 0.14)),
                               ),
-                              child: Icon(icon, color: cs.onPrimary),
+                              child: Padding(
+                                padding: const EdgeInsets.all(6),
+                                child: showLogo
+                                    ? const AppLogo(size: 40, borderRadius: BorderRadius.all(Radius.circular(14)))
+                                    : Icon(icon, color: cs.primary),
+                              ),
                             ),
                             const SizedBox(width: AppSpacing.md),
                             Expanded(

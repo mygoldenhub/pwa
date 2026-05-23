@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/app_state.dart';
+import 'package:pwa/components/app_logo.dart';
 import 'package:pwa/models/product.dart';
 import 'package:pwa/nav.dart';
 import 'package:pwa/theme.dart';
@@ -104,6 +105,11 @@ class _ProductsPageState extends State<ProductsPage> {
 
         return Scaffold(
           appBar: AppBar(
+            leading: const Padding(
+              padding: EdgeInsets.only(left: 12),
+              child: Center(child: AppLogo(size: 30, borderRadius: BorderRadius.all(Radius.circular(10)))),
+            ),
+            leadingWidth: 54,
             title: const Text('Products'),
             actions: [
               IconButton(
