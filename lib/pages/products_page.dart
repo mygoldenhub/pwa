@@ -105,11 +105,16 @@ class _ProductsPageState extends State<ProductsPage> {
 
         return Scaffold(
           appBar: AppBar(
-            leading: const Padding(
-              padding: EdgeInsets.only(left: 12),
-              child: Center(child: AppLogo(size: 30, borderRadius: BorderRadius.all(Radius.circular(10)))),
+            leadingWidth: 240,
+            leading: Padding(
+              padding: const EdgeInsets.only(left: 12),
+              child: Center(
+                child: GestureDetector(
+                  onTap: () => context.go(AppRoutes.welcome),
+                  child: const AppCornerBrand(logoSize: 42),
+                ),
+              ),
             ),
-            leadingWidth: 54,
             title: const Text('Products'),
             actions: [
               IconButton(

@@ -169,26 +169,23 @@ class _WelcomeBrandHeader extends StatelessWidget {
             ),
             child: const Padding(
               padding: EdgeInsets.all(10),
-              child: AppLogo(size: 130, borderRadius: BorderRadius.all(Radius.circular(20))),
+              child: AppLogo(size: 170, borderRadius: BorderRadius.all(Radius.circular(20))),
             ),
           ),
           const SizedBox(height: AppSpacing.sm),
           Text(
             'Scan & Go',
-            style: Theme.of(context).textTheme.displaySmall?.copyWith(
-              color: Colors.white,
-              fontWeight: FontWeight.w800,
-              height: 1.05,
-            ),
+            style: Theme.of(context).textTheme.displaySmall?.copyWith(color: Colors.white).semiBold,
+            textAlign: TextAlign.center,
           ),
           const SizedBox(height: AppSpacing.xs),
           Text(
             'STAFFLESS STORE',
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
               color: Colors.white.withValues(alpha: 0.80),
-              letterSpacing: 1.6,
-              fontWeight: FontWeight.w700,
+              letterSpacing: 1.2,
             ),
+            textAlign: TextAlign.center,
           ),
           const SizedBox(height: AppSpacing.xs),
           Container(
