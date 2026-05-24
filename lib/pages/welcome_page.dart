@@ -61,7 +61,8 @@ class WelcomePage extends StatelessWidget {
               _resolveBackgroundAsset(context),
               fit: BoxFit.cover,
               errorBuilder: (context, error, stackTrace) {
-                debugPrint('WelcomePage background asset missing. Error: $error');
+                debugPrint(
+                    'WelcomePage background asset missing. Error: $error');
                 // Keeps the screen usable even if the asset isn't added yet.
                 return DecoratedBox(
                   decoration: BoxDecoration(
@@ -85,7 +86,10 @@ class WelcomePage extends StatelessWidget {
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: [Colors.black.withValues(alpha: 0.60), Colors.black.withValues(alpha: 0.12)],
+                  colors: [
+                    Colors.black.withValues(alpha: 0.60),
+                    Colors.black.withValues(alpha: 0.12)
+                  ],
                 ),
               ),
             ),
@@ -95,20 +99,22 @@ class WelcomePage extends StatelessWidget {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 520),
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.lg, AppSpacing.lg, AppSpacing.xl),
+                  padding: const EdgeInsets.fromLTRB(AppSpacing.lg,
+                      AppSpacing.lg, AppSpacing.lg, AppSpacing.xl),
                   child: LayoutBuilder(
                     builder: (context, constraints) {
                       // Keep the "modal" centered, but allow scrolling on smaller screens.
                       return SingleChildScrollView(
                         child: ConstrainedBox(
-                          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                          constraints:
+                              BoxConstraints(minHeight: constraints.maxHeight),
                           child: IntrinsicHeight(
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
                                 const SizedBox(height: AppSpacing.sm),
                                 const _WelcomeBrandHeader(),
-                                const SizedBox(height: AppSpacing.xl),
+                                const SizedBox(height: AppSpacing.lg),
                                 TweenAnimationBuilder<double>(
                                   tween: Tween(begin: 0.0, end: 1.0),
                                   duration: const Duration(milliseconds: 520),
@@ -120,8 +126,10 @@ class WelcomePage extends StatelessWidget {
                                     );
                                   },
                                   child: _WelcomeCard(
-                                    onExistingAccount: () => context.go(AppRoutes.login),
-                                    onCreateAccount: () => context.go(AppRoutes.register),
+                                    onExistingAccount: () =>
+                                        context.go(AppRoutes.login),
+                                    onCreateAccount: () =>
+                                        context.go(AppRoutes.register),
                                   ),
                                 ),
                                 const SizedBox(height: AppSpacing.lg),
@@ -169,22 +177,28 @@ class _WelcomeBrandHeader extends StatelessWidget {
             ),
             child: const Padding(
               padding: EdgeInsets.all(10),
-              child: AppLogo(size: 170, borderRadius: BorderRadius.all(Radius.circular(20))),
+              child: AppLogo(
+                  size: 170,
+                  borderRadius: BorderRadius.all(Radius.circular(20))),
             ),
           ),
           const SizedBox(height: AppSpacing.sm),
           Text(
             'Scan & Go',
-            style: Theme.of(context).textTheme.displaySmall?.copyWith(color: Colors.white).semiBold,
+            style: Theme.of(context)
+                .textTheme
+                .displaySmall
+                ?.copyWith(color: Colors.white)
+                .semiBold,
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: AppSpacing.xs),
           Text(
             'STAFFLESS STORE',
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              color: Colors.white.withValues(alpha: 0.80),
-              letterSpacing: 1.2,
-            ),
+                  color: Colors.white.withValues(alpha: 0.80),
+                  letterSpacing: 1.2,
+                ),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: AppSpacing.xs),
@@ -206,7 +220,8 @@ class _WelcomeCard extends StatelessWidget {
   final VoidCallback onExistingAccount;
   final VoidCallback onCreateAccount;
 
-  const _WelcomeCard({required this.onExistingAccount, required this.onCreateAccount});
+  const _WelcomeCard(
+      {required this.onExistingAccount, required this.onCreateAccount});
 
   @override
   Widget build(BuildContext context) {
@@ -219,7 +234,8 @@ class _WelcomeCard extends StatelessWidget {
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
         child: Container(
-          padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.xl, AppSpacing.lg, AppSpacing.lg),
+          padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg, AppSpacing.xl, AppSpacing.lg, AppSpacing.lg),
           decoration: BoxDecoration(
             // A white-ish surface with opacity so the background subtly shows through.
             color: cs.surface.withValues(alpha: 0.86),
@@ -230,24 +246,38 @@ class _WelcomeCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('Welcome!', style: Theme.of(context).textTheme.headlineMedium?.semiBold, textAlign: TextAlign.center),
+              Text('Welcome!',
+                  style: Theme.of(context).textTheme.headlineMedium?.semiBold,
+                  textAlign: TextAlign.center),
               const SizedBox(height: AppSpacing.xs),
               Text(
                 'Access your trade account\nor create a new one to start shopping.',
-                style: Theme.of(context).textTheme.bodyLarge?.withColor(cs.onSurfaceVariant),
+                style: Theme.of(context)
+                    .textTheme
+                    .bodyLarge
+                    ?.withColor(cs.onSurfaceVariant),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: AppSpacing.lg),
               FilledButton.icon(
                 onPressed: onExistingAccount,
                 icon: Icon(Icons.person, color: cs.onPrimary),
-                label: Text('Existing Trade Account', style: Theme.of(context).textTheme.labelLarge?.copyWith(color: cs.onPrimary)),
-                style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16)),
+                label: Text('Existing Trade Account',
+                    style: Theme.of(context)
+                        .textTheme
+                        .labelLarge
+                        ?.copyWith(color: cs.onPrimary)),
+                style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 18, vertical: 16)),
               ),
               const SizedBox(height: AppSpacing.xs),
               Text(
                 'Sign in to access your account and shop.',
-                style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
+                style: Theme.of(context)
+                    .textTheme
+                    .bodyMedium
+                    ?.withColor(cs.onSurfaceVariant),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: AppSpacing.md),
@@ -255,20 +285,29 @@ class _WelcomeCard extends StatelessWidget {
               const SizedBox(height: AppSpacing.md),
               OutlinedButton.icon(
                 onPressed: onCreateAccount,
-                icon: Icon(Icons.person_add_alt_1, color: AppSemanticColors.success),
+                icon: Icon(Icons.person_add_alt_1,
+                    color: AppSemanticColors.success),
                 label: Text(
                   'New Customer / Create Account',
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(color: AppSemanticColors.success),
+                  style: Theme.of(context)
+                      .textTheme
+                      .labelLarge
+                      ?.copyWith(color: AppSemanticColors.success),
                 ),
                 style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: AppSemanticColors.success.withValues(alpha: 0.55)),
-                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+                  side: BorderSide(
+                      color: AppSemanticColors.success.withValues(alpha: 0.55)),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
                 ),
               ),
               const SizedBox(height: AppSpacing.xs),
               Text(
                 'Create a new account to get started.',
-                style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
+                style: Theme.of(context)
+                    .textTheme
+                    .bodyMedium
+                    ?.withColor(cs.onSurfaceVariant),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: AppSpacing.md),
@@ -276,10 +315,18 @@ class _WelcomeCard extends StatelessWidget {
                 child: Wrap(
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    Text('Need help? ', style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant)),
+                    Text('Need help? ',
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodyMedium
+                            ?.withColor(cs.onSurfaceVariant)),
                     TextButton(
                       onPressed: () {},
-                      child: Text('Contact support', style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: cs.primary)),
+                      child: Text('Contact support',
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodyMedium
+                              ?.copyWith(color: cs.primary)),
                     ),
                   ],
                 ),
@@ -298,16 +345,21 @@ class _OrDivider extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final style = Theme.of(context).textTheme.labelMedium?.withColor(cs.onSurfaceVariant);
+    final style =
+        Theme.of(context).textTheme.labelMedium?.withColor(cs.onSurfaceVariant);
 
     return Row(
       children: [
-        Expanded(child: Divider(color: cs.outline.withValues(alpha: 0.18), height: 1)),
+        Expanded(
+            child:
+                Divider(color: cs.outline.withValues(alpha: 0.18), height: 1)),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
           child: Text('OR', style: style),
         ),
-        Expanded(child: Divider(color: cs.outline.withValues(alpha: 0.18), height: 1)),
+        Expanded(
+            child:
+                Divider(color: cs.outline.withValues(alpha: 0.18), height: 1)),
       ],
     );
   }

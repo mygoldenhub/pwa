@@ -14,6 +14,7 @@ class VerifyEmailCodePage extends StatefulWidget {
   final String email;
   final String displayName;
   final String password;
+  final String pin;
 
   const VerifyEmailCodePage({
     super.key,
@@ -21,6 +22,7 @@ class VerifyEmailCodePage extends StatefulWidget {
     required this.email,
     required this.displayName,
     required this.password,
+    required this.pin,
   });
 
   @override
@@ -38,9 +40,12 @@ class _VerifyEmailCodePageState extends State<VerifyEmailCodePage> {
   bool _submitting = false;
   bool _resending = false;
 
+  late final TextEditingController _pinController;
+
   @override
   void initState() {
     super.initState();
+    _pinController = TextEditingController(text: widget.pin);
     _controllers = List.generate(_digits, (_) => TextEditingController());
     _focusNodes = List.generate(_digits, (_) => FocusNode());
     _startTimer();
@@ -54,6 +59,7 @@ class _VerifyEmailCodePageState extends State<VerifyEmailCodePage> {
   @override
   void dispose() {
     _timer?.cancel();
+    _pinController.dispose();
     for (final c in _controllers) {
       c.dispose();
     }
@@ -105,6 +111,7 @@ class _VerifyEmailCodePageState extends State<VerifyEmailCodePage> {
         displayName: widget.displayName,
         password: widget.password,
         code: _code,
+        pin: _pinController.text,
       );
       if (!mounted) return;
       context.go(AppRoutes.products);
@@ -199,6 +206,18 @@ class _VerifyEmailCodePageState extends State<VerifyEmailCodePage> {
             ),
           ),
           const SizedBox(height: AppSpacing.lg),
+          TextField(
+            controller: _pinController,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'PIN (4 digits)',
+              prefixIcon: Icon(Icons.pin_outlined),
+            ),
+            maxLength: 4,
+            buildCounter: (context, {required currentLength, required isFocused, maxLength}) => null,
+            enabled: !isBusy,
+          ),
+          const SizedBox(height: AppSpacing.md),
           SizedBox(
             width: double.infinity,
             child: FilledButton(

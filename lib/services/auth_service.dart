@@ -1,35 +1,197 @@
 import 'package:flutter/foundation.dart';
 import 'dart:async';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:pwa/models/app_user.dart';
 import 'package:pwa/nav.dart';
 import 'package:pwa/supabase/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class AuthService extends ChangeNotifier {
+  static const _prefsKeyPinEnabled = 'auth.pin_enabled';
+  static const _prefsKeyLastEmail = 'auth.last_email';
+  static const _prefsKeySavedPasswordPrefix = 'auth.saved_password.';
+
   bool _isInitialized = false;
   bool _isLoading = false;
   AppUser? _currentUser;
   late final StreamSubscription<AuthState> _authSub;
+
+  bool _pinEnabled = false;
+  String? _lastEmail;
+
+  // When doing a PIN login, Supabase will create a session *before* we can verify
+  // the PIN via RPC. If we let our auth listener eagerly set `_currentUser`, the
+  // router may redirect into the app even when the PIN is wrong.
+  //
+  // This flag makes PIN login atomic: we only publish a signed-in user after
+  // PIN verification succeeds.
+  bool _holdProfileUntilPinVerified = false;
+
+  Future<void> _waitForSessionReady({required String expectedUserId}) async {
+    // Supabase can complete `signInWithPassword` before the PostgREST client
+    // has fully picked up the new access token for subsequent RPC calls.
+    // This shows up as RPCs behaving like an anonymous request (auth.uid() = null)
+    // which makes `verify_user_pin` return false even for a correct PIN.
+    const maxAttempts = 12;
+    for (var i = 0; i < maxAttempts; i++) {
+      final session = SupabaseConfig.auth.currentSession;
+      final user = SupabaseConfig.auth.currentUser;
+      final token = session?.accessToken ?? '';
+      if (user?.id == expectedUserId && token.trim().isNotEmpty) return;
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+    }
+    debugPrint('AuthService: session not ready after wait (expectedUserId=$expectedUserId).');
+  }
+
+  void _logRpcValue(String label, dynamic value) {
+    debugPrint('$label: type=${value.runtimeType} value=$value');
+    if (value is Map) debugPrint('$label: keys=${value.keys.toList()}');
+    if (value is List) debugPrint('$label: length=${value.length}');
+  }
+
+  Future<bool> _verifyPinViaRpcWithRetry({required String pin, required String expectedUserId}) async {
+    // We retry because immediately after sign-in, the first PostgREST call can
+    // sometimes behave like an anonymous request (auth.uid() null) and return false.
+    const attempts = 3;
+    for (var i = 0; i < attempts; i++) {
+      await _waitForSessionReady(expectedUserId: expectedUserId);
+      final okRes = await SupabaseConfig.client.rpc('verify_user_pin', params: {'pin_input': pin.trim()});
+      _logRpcValue('AuthService._verifyPinViaRpcWithRetry attempt=${i + 1} raw response', okRes);
+      final ok = _parseRpcBool(okRes, key: 'verify_user_pin');
+      if (ok) return true;
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+    }
+    return false;
+  }
+
+  bool _parseRpcBool(dynamic value, {String? key}) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    if (value is String) {
+      final v = value.trim().toLowerCase();
+      if (v == 't') return true;
+      if (v == 'f') return false;
+      if (v == 'true') return true;
+      if (v == 'false') return false;
+      final n = num.tryParse(v);
+      if (n != null) return n != 0;
+    }
+
+    // Supabase Dart versions can return RPC results wrapped.
+    // Common shapes:
+    // - {"data": true}
+    // - {"data": {"verify_user_pin": true}}
+    // - [{"verify_user_pin": true}]
+    // - [true]
+    if (value is Map) {
+      if (value.containsKey('data')) return _parseRpcBool(value['data'], key: key);
+      if (key != null && value.containsKey(key)) return _parseRpcBool(value[key]);
+      // If it's a single-entry map, treat its only value as the scalar.
+      if (value.length == 1) return _parseRpcBool(value.values.first, key: key);
+    }
+
+    if (value is List) {
+      if (value.isEmpty) return false;
+      if (value.length == 1) return _parseRpcBool(value.first, key: key);
+      if (key != null) {
+        final first = value.first;
+        if (first is Map && first.containsKey(key)) return _parseRpcBool(first[key]);
+      }
+    }
+
+    // Some PostgREST/Supabase client versions can wrap scalar RPC outputs.
+    // Example shapes we defensively support:
+    // - {"verify_user_pin": true}
+    // - [{"verify_user_pin": true}]
+    return false;
+  }
+
+  Future<void> _revokeSessionAfterFailedPin() async {
+    // Best-effort: if we created a Supabase session (via password) but PIN failed,
+    // we must revoke it immediately so the router cannot treat the user as authenticated.
+    try {
+      await SupabaseConfig.auth.signOut();
+    } catch (e) {
+      debugPrint('AuthService: failed to sign out after PIN failure: $e');
+    } finally {
+      // Keep holding until the auth stream delivers the signed-out event.
+      // (The listener will clear state and release the hold.)
+      _currentUser = null;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> _isPinHashMissingForUser(String userId) async {
+    try {
+      final row = await SupabaseService.selectSingle(
+        'users',
+        select: 'pin_hash',
+        filters: {'id': userId},
+      );
+      if (row == null) return true;
+      final v = row['pin_hash'];
+      if (v == null) return true;
+      final s = v.toString().trim();
+      return s.isEmpty;
+    } catch (e) {
+      // If RLS blocks access (or network issues), we can't safely auto-repair.
+      debugPrint('AuthService: unable to read pin_hash (possible RLS): $e');
+      return false;
+    }
+  }
+
+  Future<bool> _tryRepairMissingPinHash({required User supaUser, required String pin}) async {
+    // Self-heal for the common case where signup succeeded but `set_user_pin` failed
+    // (e.g., pin_hash column was missing at the time). We only do this if we can
+    // confirm the current row has no pin_hash.
+    final missing = await _isPinHashMissingForUser(supaUser.id);
+    if (!missing) return false;
+
+    try {
+      debugPrint('AuthService: pin_hash missing; attempting to set PIN now.');
+      await SupabaseConfig.client.rpc('set_user_pin', params: {'pin_input': pin.trim()});
+      final okRes = await SupabaseConfig.client.rpc('verify_user_pin', params: {'pin_input': pin.trim()});
+      _logRpcValue('AuthService._tryRepairMissingPinHash verify_user_pin raw response', okRes);
+      final ok = _parseRpcBool(okRes, key: 'verify_user_pin');
+      return ok;
+    } catch (e) {
+      debugPrint('AuthService: failed to repair missing pin_hash: $e');
+      return false;
+    }
+  }
 
   bool get isInitialized => _isInitialized;
   bool get isLoading => _isLoading;
   AppUser? get currentUser => _currentUser;
   bool get isSignedIn => _currentUser != null;
 
+  bool get pinEnabled => _pinEnabled;
+  String? get lastEmail => _lastEmail;
+
   Future<void> init() async {
     if (_isInitialized) return;
     _isLoading = true;
     notifyListeners();
     try {
+      await _loadPrefs();
+
       _authSub = SupabaseConfig.auth.onAuthStateChange.listen((event) async {
         final supaUser = event.session?.user;
         if (supaUser == null) {
+          _holdProfileUntilPinVerified = false;
           _currentUser = null;
           notifyListeners();
           return;
         }
+
+        // During PIN sign-in we intentionally suppress publishing an authenticated
+        // profile until the RPC verifies the PIN.
+        if (_holdProfileUntilPinVerified) return;
+
         try {
           _currentUser = await _loadOrCreateProfile(supaUser, displayNameHint: null);
+          _lastEmail = (supaUser.email ?? '').trim().toLowerCase();
+          await _savePrefs();
         } catch (e) {
           debugPrint('AuthService: failed to load profile: $e');
         }
@@ -39,6 +201,7 @@ class AuthService extends ChangeNotifier {
       final existing = SupabaseConfig.auth.currentUser;
       if (existing != null) {
         _currentUser = await _loadOrCreateProfile(existing, displayNameHint: null);
+        _lastEmail = (existing.email ?? '').trim().toLowerCase();
       }
     } catch (e) {
       debugPrint('AuthService.init failed: $e');
@@ -46,6 +209,88 @@ class AuthService extends ChangeNotifier {
       _isInitialized = true;
       _isLoading = false;
       notifyListeners();
+    }
+  }
+
+  Future<void> _loadPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _pinEnabled = prefs.getBool(_prefsKeyPinEnabled) ?? false;
+      _lastEmail = prefs.getString(_prefsKeyLastEmail);
+    } catch (e) {
+      debugPrint('AuthService: failed to load prefs: $e');
+      _pinEnabled = false;
+      _lastEmail = null;
+    }
+  }
+
+  Future<void> _savePrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_prefsKeyPinEnabled, _pinEnabled);
+      if (_lastEmail != null) await prefs.setString(_prefsKeyLastEmail, _lastEmail!);
+    } catch (e) {
+      debugPrint('AuthService: failed to save prefs: $e');
+    }
+  }
+
+  String _passwordKeyForEmail(String email) => '$_prefsKeySavedPasswordPrefix${email.trim().toLowerCase()}';
+
+  Future<void> _savePasswordForEmail({required String email, required String password}) async {
+    final normalized = email.trim().toLowerCase();
+    if (normalized.isEmpty || password.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_passwordKeyForEmail(normalized), password);
+    } catch (e) {
+      debugPrint('AuthService: failed to save password for email: $e');
+    }
+  }
+
+  Future<String?> _getSavedPasswordForEmail(String email) async {
+    final normalized = email.trim().toLowerCase();
+    if (normalized.isEmpty) return null;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(_passwordKeyForEmail(normalized));
+    } catch (e) {
+      debugPrint('AuthService: failed to read saved password for email: $e');
+      return null;
+    }
+  }
+
+  void _validatePinOrThrow(String pin) {
+    final p = pin.trim();
+    if (p.length != 4 || p.contains(RegExp(r'\D'))) throw Exception('PIN must be exactly 4 digits.');
+  }
+
+  Exception _friendlyPinRpcException(dynamic e) {
+    if (e is PostgrestException) {
+      // PGRST202: PostgREST schema cache does not have the function/signature.
+      if ((e.code ?? '').toString() == 'PGRST202') {
+        return Exception(
+          'PIN backend is not installed on Supabase yet. Please apply the SQL in lib/supabase/supabase_tables.sql (it creates public.set_user_pin and public.verify_user_pin), then reload the Supabase API schema cache.',
+        );
+      }
+      return Exception(e.message);
+    }
+    return Exception(e.toString());
+  }
+
+  /// Store a PIN hash for the currently authenticated user (requires session).
+  Future<void> setPin({required String pin}) async {
+    _validatePinOrThrow(pin);
+    try {
+      await SupabaseConfig.client.rpc('set_user_pin', params: {'pin_input': pin.trim()});
+      _pinEnabled = true;
+      await _savePrefs();
+      notifyListeners();
+    } on PostgrestException catch (e) {
+      debugPrint('AuthService.setPin failed: ${e.message} (code: ${e.code})');
+      throw _friendlyPinRpcException(e);
+    } catch (e) {
+      debugPrint('AuthService.setPin failed: $e');
+      throw _friendlyPinRpcException(e);
     }
   }
 
@@ -175,6 +420,7 @@ class AuthService extends ChangeNotifier {
     required String displayName,
     required String password,
     required String code,
+    required String pin,
   }) async {
     _isLoading = true;
     notifyListeners();
@@ -184,6 +430,7 @@ class AuthService extends ChangeNotifier {
       final token = code.trim();
       if (token.length != 6 || token.contains(RegExp(r'\D'))) throw Exception('Please enter the 6-digit code.');
       _validatePasswordOrThrow(password);
+      _validatePinOrThrow(pin);
 
       final res = await SupabaseConfig.auth.verifyOTP(
         type: OtpType.signup,
@@ -207,7 +454,30 @@ class AuthService extends ChangeNotifier {
         throw Exception(_friendlyAuthMessage(e));
       }
 
+      // Ensure the profile row exists *before* attempting to store the PIN.
+      // `public.set_user_pin()` updates `public.users` and will fail with
+      // "Profile row not found" if the row hasn't been created yet.
       final profile = await _loadOrCreateProfile(supaUser, displayNameHint: displayName);
+
+      // Store PIN hash in public.users.
+      try {
+        await _waitForSessionReady(expectedUserId: supaUser.id);
+        await SupabaseConfig.client.rpc('set_user_pin', params: {'pin_input': pin.trim()});
+        // Immediately verify we can validate it (prevents silent misconfiguration).
+        final ok = await _verifyPinViaRpcWithRetry(pin: pin, expectedUserId: supaUser.id);
+        if (!ok) throw Exception('PIN could not be saved correctly. Please try again.');
+
+        _pinEnabled = true;
+        _lastEmail = normalized.toLowerCase();
+        await _savePasswordForEmail(email: normalized, password: password);
+        await _savePrefs();
+      } on PostgrestException catch (e) {
+        debugPrint('AuthService.verifySignupEmailCode set/verify pin failed: ${e.message} (code: ${e.code})');
+        throw _friendlyPinRpcException(e);
+      } catch (e) {
+        debugPrint('AuthService.verifySignupEmailCode set/verify pin failed: $e');
+        rethrow;
+      }
       _currentUser = profile;
       notifyListeners();
       return profile;
@@ -263,6 +533,9 @@ class AuthService extends ChangeNotifier {
       if (supaUser == null) throw Exception('Sign in failed. Please try again.');
       final profile = await _loadOrCreateProfile(supaUser, displayNameHint: null);
       _currentUser = profile;
+      _lastEmail = (email.trim()).toLowerCase();
+      await _savePasswordForEmail(email: email, password: password);
+      await _savePrefs();
       notifyListeners();
       return profile;
     } on AuthException catch (e) {
@@ -272,6 +545,92 @@ class AuthService extends ChangeNotifier {
       debugPrint('AuthService.signIn failed: $e');
       rethrow;
     } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// Signs in using email + PIN.
+  ///
+  /// Supabase Auth does not support PIN as a primary credential by default.
+  /// To enable a smooth PIN login UX, we:
+  /// 1) Sign in with a locally-saved password for this email (saved at signup and after password login)
+  /// 2) Verify the PIN via `verify_user_pin` RPC
+  ///
+  /// If the password was never saved on this device (e.g., different device / cleared storage),
+  /// we can't create a Supabase session and will ask the user to use password.
+  Future<AppUser> signInWithPin({required String email, required String pin}) async {
+    _validatePinOrThrow(pin);
+    _isLoading = true;
+    notifyListeners();
+    try {
+      final normalized = email.trim();
+      if (normalized.isEmpty || !normalized.contains('@')) throw Exception('Please enter a valid email.');
+
+      // Defensive: ensure app-state never considers us signed in during PIN login.
+      // (Important when a previous session/profile was still in memory.)
+      _currentUser = null;
+      notifyListeners();
+
+      final savedPassword = await _getSavedPasswordForEmail(normalized);
+      if (savedPassword == null || savedPassword.trim().isEmpty) {
+        throw Exception('PIN login is not available on this device yet. Please sign in once with password.');
+      }
+
+      // IMPORTANT: Supabase creates a session immediately after this call.
+      // We suppress publishing that session until the PIN is verified.
+      // Keep this flag TRUE until we either (a) publish the user on success
+      // or (b) complete signOut on failure. Otherwise the auth listener may
+      // briefly publish a signed-in user and the router can redirect.
+      _holdProfileUntilPinVerified = true;
+      final res = await SupabaseConfig.auth.signInWithPassword(email: normalized, password: savedPassword);
+      final supaUser = res.user;
+      if (supaUser == null) throw Exception('Sign in failed. Please try again.');
+
+      try {
+        await _waitForSessionReady(expectedUserId: supaUser.id);
+        // Now that we have a session, validate the PIN against the backend.
+        final ok = await _verifyPinViaRpcWithRetry(pin: pin, expectedUserId: supaUser.id);
+        if (!ok) {
+          // Common migration edge case: account was created before `pin_hash` existed,
+          // so the PIN was never stored. If we can confirm pin_hash is missing,
+          // attempt a safe self-repair (requires already having the user's password).
+          final repaired = await _tryRepairMissingPinHash(supaUser: supaUser, pin: pin);
+          if (!repaired) throw Exception('Incorrect PIN');
+        }
+
+        // PIN is correct: publish signed-in state.
+        _holdProfileUntilPinVerified = false;
+        final profile = await _loadOrCreateProfile(supaUser, displayNameHint: null);
+        _currentUser = profile;
+        _lastEmail = normalized.toLowerCase();
+        _pinEnabled = true;
+        await _savePrefs();
+        notifyListeners();
+        return profile;
+      } on PostgrestException catch (e) {
+        // Even RPC failures must not leave the user logged in.
+        debugPrint('AuthService.signInWithPin verify_user_pin failed: ${e.message} (code: ${e.code})');
+        await _revokeSessionAfterFailedPin();
+        throw _friendlyPinRpcException(e);
+      } catch (e) {
+        // If the PIN is wrong (or verification fails), we MUST revoke the session
+        // created by signInWithPassword, otherwise the router may treat the user
+        // as authenticated.
+        await _revokeSessionAfterFailedPin();
+        rethrow;
+      }
+    } on AuthException catch (e) {
+      debugPrint('AuthService.signInWithPin auth error: ${e.message}');
+      throw Exception(_friendlyAuthMessage(e));
+    } catch (e) {
+      debugPrint('AuthService.signInWithPin failed: $e');
+      if (e is Exception) rethrow;
+      throw _friendlyPinRpcException(e);
+    } finally {
+      // NOTE: Do not forcibly reset `_holdProfileUntilPinVerified` here.
+      // On a wrong PIN, we must keep holding until signOut completes; otherwise
+      // the auth listener may publish a temporary authenticated user.
       _isLoading = false;
       notifyListeners();
     }

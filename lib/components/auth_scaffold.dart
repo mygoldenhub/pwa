@@ -80,12 +80,6 @@ class AuthScaffold extends StatelessWidget {
                 ),
               ),
               Positioned(
-                top: -120,
-                right: -140,
-                child:
-                    _Blob(color: cs.primary.withValues(alpha: 0.16), size: 320),
-              ),
-              Positioned(
                 top: 10,
                 left: 12,
                 child: GestureDetector(

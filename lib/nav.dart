@@ -76,6 +76,7 @@ class AppRouter {
                 email: (extra['email'] ?? '').toString(),
                 displayName: (extra['displayName'] ?? '').toString(),
                 password: (extra['password'] ?? '').toString(),
+                    pin: (extra['pin'] ?? '').toString(),
               ),
             );
           },

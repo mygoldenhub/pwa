@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -17,16 +19,80 @@ class RegisterPage extends StatefulWidget {
 class _RegisterPageState extends State<RegisterPage> {
   final _displayNameController = TextEditingController();
   final _emailController = TextEditingController();
+  final _codeController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _pinController = TextEditingController();
   bool _obscure = true;
   bool _submitting = false;
+
+  static const Duration _cooldown = Duration(seconds: 45);
+  Timer? _timer;
+  Duration _remaining = Duration.zero;
+  bool _sendingCode = false;
 
   @override
   void dispose() {
     _displayNameController.dispose();
     _emailController.dispose();
+    _codeController.dispose();
     _passwordController.dispose();
+    _pinController.dispose();
+    _timer?.cancel();
     super.dispose();
+  }
+
+  void _startCooldown() {
+    _timer?.cancel();
+    setState(() => _remaining = _cooldown);
+    _timer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) return;
+      if (_remaining.inSeconds <= 1) {
+        t.cancel();
+        setState(() => _remaining = Duration.zero);
+      } else {
+        setState(() => _remaining -= const Duration(seconds: 1));
+      }
+    });
+  }
+
+  String _format(Duration d) {
+    final s = d.inSeconds;
+    final mm = (s ~/ 60).toString().padLeft(2, '0');
+    final ss = (s % 60).toString().padLeft(2, '0');
+    return '$mm:$ss';
+  }
+
+  Future<void> _sendCode() async {
+    FocusScope.of(context).unfocus();
+    if (_sendingCode || _remaining != Duration.zero) return;
+    setState(() => _sendingCode = true);
+    try {
+      final displayName = _displayNameController.text;
+      final email = _emailController.text;
+      final normalizedEmail = email.trim();
+
+      if (displayName.trim().isEmpty) throw Exception('Please enter your full name.');
+      if (normalizedEmail.isEmpty || !normalizedEmail.contains('@')) throw Exception('Please enter a valid email.');
+
+      final exists = await widget.appState.auth.emailExists(email: normalizedEmail);
+      if (exists) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Email is already exist')));
+        return;
+      }
+
+      await widget.appState.auth.requestSignupEmailCode(email: normalizedEmail, displayName: displayName);
+      if (!mounted) return;
+      _startCooldown();
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('6-digit code sent to your email.')));
+    } catch (e) {
+      debugPrint('RegisterPage: send code failed: $e');
+      if (!mounted) return;
+      final msg = e.toString().replaceFirst('Exception: ', '');
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    } finally {
+      if (mounted) setState(() => _sendingCode = false);
+    }
   }
 
   Future<void> _submit() async {
@@ -37,6 +103,8 @@ class _RegisterPageState extends State<RegisterPage> {
       final email = _emailController.text;
       final password = _passwordController.text;
       final displayName = _displayNameController.text;
+      final code = _codeController.text;
+      final pin = _pinController.text;
 
       final normalizedEmail = email.trim();
       if (displayName.trim().isEmpty) throw Exception('Please enter your full name.');
@@ -53,26 +121,19 @@ class _RegisterPageState extends State<RegisterPage> {
         throw Exception('Password is too easy. Please choose a stronger password.');
       }
 
-      // Pre-check (edge function) to prevent sending OTP for already-registered emails.
-      // If this check fails (function not deployed / CORS / network), we STOP and show a message
-      // because the expected UX is: only send code for new emails.
-      final exists = await widget.appState.auth.emailExists(email: normalizedEmail);
-      if (exists) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Email is already exist')));
-        return;
-      }
+      if (code.trim().length != 6 || code.trim().contains(RegExp(r'\D'))) throw Exception('Please enter the 6-digit code.');
+      if (pin.trim().length != 4 || pin.trim().contains(RegExp(r'\D'))) throw Exception('PIN must be exactly 4 digits.');
 
-      await widget.appState.auth.requestSignupEmailCode(email: email, displayName: displayName);
-      if (!mounted) return;
-      context.go(
-        AppRoutes.verifyEmail,
-        extra: {
-          'email': email,
-          'password': password,
-          'displayName': displayName,
-        },
+      await widget.appState.auth.verifySignupEmailCode(
+        email: normalizedEmail,
+        displayName: displayName,
+        password: password,
+        code: code,
+        pin: pin,
       );
+
+      if (!mounted) return;
+      context.go(AppRoutes.products);
     } catch (e) {
       debugPrint('Register failed: $e');
       if (!mounted) return;
@@ -119,6 +180,38 @@ class _RegisterPageState extends State<RegisterPage> {
             textInputAction: TextInputAction.next,
           ),
           const SizedBox(height: AppSpacing.md),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _codeController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Verify code',
+                    prefixIcon: Icon(Icons.shield_outlined),
+                  ),
+                  maxLength: 6,
+                  buildCounter: (context, {required currentLength, required isFocused, maxLength}) => null,
+                  textInputAction: TextInputAction.next,
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              SizedBox(
+                height: 56,
+                child: FilledButton(
+                  onPressed: (isBusy || _sendingCode || _remaining != Duration.zero) ? null : _sendCode,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: cs.primary,
+                    foregroundColor: cs.onPrimary,
+                  ),
+                  child: _sendingCode
+                      ? SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: cs.onPrimary))
+                      : Text(_remaining == Duration.zero ? 'Send code' : _format(_remaining)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.md),
           TextField(
             controller: _passwordController,
             obscureText: _obscure,
@@ -132,6 +225,18 @@ class _RegisterPageState extends State<RegisterPage> {
                 color: cs.onSurfaceVariant,
               ),
             ),
+            textInputAction: TextInputAction.next,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          TextField(
+            controller: _pinController,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'PIN (4 digits)',
+              prefixIcon: Icon(Icons.pin_outlined),
+            ),
+            maxLength: 4,
+            buildCounter: (context, {required currentLength, required isFocused, maxLength}) => null,
             onSubmitted: (_) => _submit(),
           ),
           const SizedBox(height: AppSpacing.lg),
