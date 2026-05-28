@@ -9,6 +9,9 @@ create table if not exists public.users (
   id uuid primary key references auth.users(id) on delete cascade,
   email text not null,
   display_name text not null,
+  company_name text null,
+  phone_number text null,
+  xero_account_id text null,
   -- BCrypt hash produced by pgcrypto. Never store raw PINs.
   pin_hash text null,
   created_at timestamptz not null default now(),
@@ -16,6 +19,15 @@ create table if not exists public.users (
 );
 
 create unique index if not exists idx_users_email_unique on public.users (lower(email));
+
+-- Stores the rotating Xero OAuth2 refresh token used by the Edge Function.
+-- This is intended to be a single-row table (id='default').
+create table if not exists public.xero_oauth_tokens (
+  id text primary key default 'default',
+  refresh_token text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
 
 -- Functions to set/verify PIN for the authenticated user.
 -- These run as SECURITY DEFINER so they can update even with strict RLS,

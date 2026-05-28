@@ -4,6 +4,7 @@ import 'package:pwa/app_state.dart';
 import 'package:pwa/pages/account_page.dart';
 import 'package:pwa/pages/app_shell_page.dart';
 import 'package:pwa/pages/auth_callback_page.dart';
+import 'package:pwa/pages/barcode_scanner_page.dart';
 import 'package:pwa/pages/loading_page.dart';
 import 'package:pwa/pages/login_page.dart';
 import 'package:pwa/pages/product_form_page.dart';
@@ -75,8 +76,10 @@ class AppRouter {
                 appState: appState,
                 email: (extra['email'] ?? '').toString(),
                 displayName: (extra['displayName'] ?? '').toString(),
+                companyName: (extra['companyName'] ?? '').toString(),
+                phoneNumber: (extra['phoneNumber'] ?? '').toString(),
                 password: (extra['password'] ?? '').toString(),
-                    pin: (extra['pin'] ?? '').toString(),
+                pin: (extra['pin'] ?? '').toString(),
               ),
             );
           },
@@ -94,9 +97,16 @@ class AppRouter {
                   routes: [
                     GoRoute(
                       path: 'new',
-                      pageBuilder: (context, state) => MaterialPage(
-                        child: ProductFormPage(appState: appState, productId: null),
-                      ),
+                      pageBuilder: (context, state) {
+                        final extra = (state.extra is Map) ? (state.extra as Map) : const <String, dynamic>{};
+                        return MaterialPage(
+                          child: ProductFormPage(appState: appState, productId: null, initialBarcode: extra['barcode']?.toString()),
+                        );
+                      },
+                    ),
+                    GoRoute(
+                      path: 'scan',
+                      pageBuilder: (context, state) => const MaterialPage(child: BarcodeScannerPage()),
                     ),
                     GoRoute(
                       path: ':id/edit',
@@ -139,5 +149,6 @@ class AppRoutes {
   static const String account = '/app/account';
 
   static const String productNew = '/app/products/new';
+  static const String barcodeScan = '/app/products/scan';
   static String productEdit(String id) => '/app/products/$id/edit';
 }

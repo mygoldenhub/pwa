@@ -79,7 +79,13 @@ class _ProductsPageState extends State<ProductsPage> {
   }
 
   void _openNewProduct() async {
-    final saved = await context.push<bool>(AppRoutes.productNew);
+    final barcode = await context.push<String?>(AppRoutes.barcodeScan);
+    if (!mounted) return;
+
+    final saved = await context.push<bool>(
+      AppRoutes.productNew,
+      extra: barcode == null ? null : {'barcode': barcode},
+    );
     if (!mounted) return;
     if (saved == true) _showSavedNotification();
   }

@@ -46,24 +46,57 @@ export type Database = {
       }
       users: {
         Row: {
+          company_name: string
           created_at: string
           display_name: string
           email: string
           id: string
+          phone_number: string
+          pin_hash: string | null
           updated_at: string
+          xero_account_id: string | null
         }
         Insert: {
+          company_name: string
           created_at?: string
           display_name: string
           email: string
           id: string
+          phone_number: string
+          pin_hash?: string | null
           updated_at?: string
+          xero_account_id?: string | null
         }
         Update: {
+          company_name?: string
           created_at?: string
           display_name?: string
           email?: string
           id?: string
+          phone_number?: string
+          pin_hash?: string | null
+          updated_at?: string
+          xero_account_id?: string | null
+        }
+        Relationships: []
+      }
+      xero_oauth_tokens: {
+        Row: {
+          created_at: string
+          id: string
+          refresh_token: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          refresh_token: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          refresh_token?: string
           updated_at?: string
         }
         Relationships: []
@@ -73,7 +106,8 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      set_user_pin: { Args: { pin_input: string }; Returns: undefined }
+      verify_user_pin: { Args: { pin_input: string }; Returns: boolean }
     }
     Enums: {
       [_ in never]: never

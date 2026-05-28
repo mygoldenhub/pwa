@@ -11,8 +11,9 @@ import 'package:pwa/theme.dart';
 class ProductFormPage extends StatefulWidget {
   final AppState appState;
   final String? productId;
+  final String? initialBarcode;
 
-  const ProductFormPage({super.key, required this.appState, required this.productId});
+  const ProductFormPage({super.key, required this.appState, required this.productId, this.initialBarcode});
 
   @override
   State<ProductFormPage> createState() => _ProductFormPageState();
@@ -37,6 +38,10 @@ class _ProductFormPageState extends State<ProductFormPage> {
       _stockController.text = _existing!.stockQty.toString();
     } else {
       _stockController.text = '0';
+      final initialBarcode = widget.initialBarcode?.trim();
+      if (initialBarcode != null && initialBarcode.isNotEmpty) {
+        _barcodeController.text = initialBarcode;
+      }
     }
   }
 

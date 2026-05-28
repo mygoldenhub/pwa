@@ -13,6 +13,8 @@ class VerifyEmailCodePage extends StatefulWidget {
   final AppState appState;
   final String email;
   final String displayName;
+  final String companyName;
+  final String phoneNumber;
   final String password;
   final String pin;
 
@@ -21,6 +23,8 @@ class VerifyEmailCodePage extends StatefulWidget {
     required this.appState,
     required this.email,
     required this.displayName,
+    required this.companyName,
+    required this.phoneNumber,
     required this.password,
     required this.pin,
   });
@@ -39,6 +43,8 @@ class _VerifyEmailCodePageState extends State<VerifyEmailCodePage> {
   Duration _remaining = _cooldown;
   bool _submitting = false;
   bool _resending = false;
+
+  bool get _isExpired => _remaining == Duration.zero;
 
   late final TextEditingController _pinController;
 
@@ -103,12 +109,14 @@ class _VerifyEmailCodePageState extends State<VerifyEmailCodePage> {
 
   Future<void> _verify() async {
     FocusScope.of(context).unfocus();
-    if (_submitting || !_isComplete) return;
+    if (_submitting || !_isComplete || _isExpired) return;
     setState(() => _submitting = true);
     try {
       await widget.appState.auth.verifySignupEmailCode(
         email: widget.email,
         displayName: widget.displayName,
+        companyName: widget.companyName,
+        phoneNumber: widget.phoneNumber,
         password: widget.password,
         code: _code,
         pin: _pinController.text,
@@ -201,7 +209,9 @@ class _VerifyEmailCodePageState extends State<VerifyEmailCodePage> {
           const SizedBox(height: AppSpacing.lg),
           Center(
             child: Text(
-              _remaining == Duration.zero ? 'You can resend a code now.' : 'Resend code in ${_format(_remaining)}',
+              _remaining == Duration.zero
+                  ? 'Code expired — please resend.'
+                  : 'Code expires in ${_format(_remaining)}',
               style: Theme.of(context).textTheme.bodySmall?.withColor(cs.onSurfaceVariant),
             ),
           ),
@@ -221,7 +231,7 @@ class _VerifyEmailCodePageState extends State<VerifyEmailCodePage> {
           SizedBox(
             width: double.infinity,
             child: FilledButton(
-              onPressed: (!isBusy && _isComplete) ? _verify : null,
+              onPressed: (!isBusy && _isComplete && !_isExpired) ? _verify : null,
               child: Text(
                 isBusy ? 'Verifying…' : 'Verify & Continue',
                 style: TextStyle(color: cs.onPrimary),

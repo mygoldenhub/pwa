@@ -418,6 +418,8 @@ class AuthService extends ChangeNotifier {
   Future<AppUser> verifySignupEmailCode({
     required String email,
     required String displayName,
+    required String companyName,
+    required String phoneNumber,
     required String password,
     required String code,
     required String pin,
@@ -431,6 +433,8 @@ class AuthService extends ChangeNotifier {
       if (token.length != 6 || token.contains(RegExp(r'\D'))) throw Exception('Please enter the 6-digit code.');
       _validatePasswordOrThrow(password);
       _validatePinOrThrow(pin);
+      if (companyName.trim().isEmpty) throw Exception('Please enter your company name.');
+      if (phoneNumber.trim().isEmpty) throw Exception('Please enter your phone number.');
 
       final res = await SupabaseConfig.auth.verifyOTP(
         type: OtpType.signup,
@@ -454,9 +458,71 @@ class AuthService extends ChangeNotifier {
         throw Exception(_friendlyAuthMessage(e));
       }
 
-      // Ensure the profile row exists *before* attempting to store the PIN.
-      // `public.set_user_pin()` updates `public.users` and will fail with
-      // "Profile row not found" if the row hasn't been created yet.
+      // 1) Upsert user in Xero (server-side Edge Function) to get Xero ContactID.
+      String? xeroContactId;
+      try {
+        // Uses Xero Custom Connection (client_credentials) – no refresh_token required.
+        const fnName = 'xero_upsert_contact_cc';
+        final debugUrl = SupabaseConfig.edgeFunctionUrl(fnName);
+        debugPrint('AuthService.verifySignupEmailCode: invoking $fnName at $debugUrl');
+
+        final res = await SupabaseConfig.client.functions
+            .invoke(
+              fnName,
+              body: {
+                'full_name': displayName.trim(),
+                'email': normalized.trim().toLowerCase(),
+                'company_name': companyName.trim(),
+                'phone_number': phoneNumber.trim(),
+              },
+              headers: const {'content-type': 'application/json'},
+            )
+            .timeout(const Duration(seconds: 18));
+
+        final data = res.data;
+        if (data is Map && data['contactId'] is String) {
+          xeroContactId = (data['contactId'] as String).trim();
+        }
+        if (xeroContactId == null || xeroContactId!.isEmpty) {
+          debugPrint('AuthService.verifySignupEmailCode: $fnName unexpected response: ${res.data}');
+          throw Exception('Failed to create your Xero account. Please try again.');
+        }
+      } catch (e) {
+        debugPrint('AuthService.verifySignupEmailCode: Xero upsert failed: $e');
+        final msg = e.toString().toLowerCase();
+        if (msg.contains('xero_invalid_scope') || msg.contains('invalid_scope') || msg.contains('no valid scopes remaining')) {
+          throw Exception(
+            "Xero isn't configured for machine-to-machine sync. Your Xero app must be a Custom Connection (client_credentials) and its scopes must include 'accounting.contacts'. Also ensure your Edge Function secret XERO_SCOPES does NOT include offline_access/openid/profile/email.",
+          );
+        }
+        if (msg.contains('failed to fetch') || msg.contains('clientfailed') || msg.contains('clientexception')) {
+          throw Exception(
+            'Xero service is unreachable. Please deploy the Edge Function and set its secrets: ${SupabaseConfig.edgeFunctionUrl('xero_upsert_contact_cc')}',
+          );
+        }
+        rethrow;
+      }
+
+      // 2) Upsert the profile row (and save the extended fields) to public.users.
+      // We do this BEFORE setting the PIN so `public.set_user_pin()` won't fail with
+      // "Profile row not found".
+      try {
+        final now = DateTime.now().toUtc().toIso8601String();
+        await SupabaseService.from('users').upsert({
+          'id': supaUser.id,
+          'email': (supaUser.email ?? normalized).trim(),
+          'display_name': displayName.trim(),
+          'company_name': companyName.trim(),
+          'phone_number': phoneNumber.trim(),
+          'xero_account_id': xeroContactId,
+          'updated_at': now,
+        });
+      } on PostgrestException catch (e) {
+        debugPrint('AuthService.verifySignupEmailCode: profile update blocked/failed: ${e.message} (code: ${e.code})');
+      } catch (e) {
+        debugPrint('AuthService.verifySignupEmailCode: profile update failed: $e');
+      }
+
       final profile = await _loadOrCreateProfile(supaUser, displayNameHint: displayName);
 
       // Store PIN hash in public.users.
@@ -711,6 +777,9 @@ class AuthService extends ChangeNotifier {
         id: supaUser.id,
         email: email,
         displayName: displayName,
+        companyName: null,
+        phoneNumber: null,
+        xeroAccountId: null,
         createdAt: now,
         updatedAt: now,
       );
@@ -720,6 +789,9 @@ class AuthService extends ChangeNotifier {
         id: supaUser.id,
         email: email,
         displayName: displayName,
+        companyName: null,
+        phoneNumber: null,
+        xeroAccountId: null,
         createdAt: now,
         updatedAt: now,
       );
@@ -728,18 +800,21 @@ class AuthService extends ChangeNotifier {
     try {
       final row = await SupabaseService.selectSingle('users', filters: {'id': supaUser.id});
       if (row == null) {
-        return AppUser(id: supaUser.id, email: email, displayName: displayName, createdAt: now, updatedAt: now);
+        return AppUser(id: supaUser.id, email: email, displayName: displayName, companyName: null, phoneNumber: null, xeroAccountId: null, createdAt: now, updatedAt: now);
       }
       return AppUser(
         id: row['id'].toString(),
         email: (row['email'] ?? email).toString(),
         displayName: (row['display_name'] ?? displayName).toString(),
+        companyName: row['company_name']?.toString(),
+        phoneNumber: row['phone_number']?.toString(),
+        xeroAccountId: row['xero_account_id']?.toString(),
         createdAt: DateTime.tryParse(row['created_at']?.toString() ?? '') ?? now,
         updatedAt: DateTime.tryParse(row['updated_at']?.toString() ?? '') ?? now,
       );
     } on PostgrestException catch (e) {
       debugPrint('AuthService: profile select blocked by RLS: ${e.message} (code: ${e.code})');
-      return AppUser(id: supaUser.id, email: email, displayName: displayName, createdAt: now, updatedAt: now);
+      return AppUser(id: supaUser.id, email: email, displayName: displayName, companyName: null, phoneNumber: null, xeroAccountId: null, createdAt: now, updatedAt: now);
     }
   }
 

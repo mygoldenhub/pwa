@@ -9,3 +9,25 @@ entrypoint = "./functions/check_email_exists/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/check_email_exists/*.html" ]
+
+[functions.xero_upsert_contact]
+enabled = true
+verify_jwt = true
+import_map = "./functions/xero_upsert_contact/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/xero_upsert_contact/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/xero_upsert_contact/*.html" ]
+
+[functions.xero_upsert_contact_cc]
+enabled = true
+verify_jwt = true
+import_map = "./functions/xero_upsert_contact_cc/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/xero_upsert_contact_cc/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/xero_upsert_contact_cc/*.html" ]

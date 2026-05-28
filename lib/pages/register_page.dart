@@ -20,6 +20,8 @@ class _RegisterPageState extends State<RegisterPage> {
   final _displayNameController = TextEditingController();
   final _emailController = TextEditingController();
   final _codeController = TextEditingController();
+  final _companyController = TextEditingController();
+  final _phoneController = TextEditingController();
   final _passwordController = TextEditingController();
   final _pinController = TextEditingController();
   bool _obscure = true;
@@ -29,12 +31,15 @@ class _RegisterPageState extends State<RegisterPage> {
   Timer? _timer;
   Duration _remaining = Duration.zero;
   bool _sendingCode = false;
+  DateTime? _codeSentAt;
 
   @override
   void dispose() {
     _displayNameController.dispose();
     _emailController.dispose();
     _codeController.dispose();
+    _companyController.dispose();
+    _phoneController.dispose();
     _passwordController.dispose();
     _pinController.dispose();
     _timer?.cancel();
@@ -83,6 +88,7 @@ class _RegisterPageState extends State<RegisterPage> {
 
       await widget.appState.auth.requestSignupEmailCode(email: normalizedEmail, displayName: displayName);
       if (!mounted) return;
+      _codeSentAt = DateTime.now();
       _startCooldown();
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('6-digit code sent to your email.')));
     } catch (e) {
@@ -104,11 +110,23 @@ class _RegisterPageState extends State<RegisterPage> {
       final password = _passwordController.text;
       final displayName = _displayNameController.text;
       final code = _codeController.text;
+      final companyName = _companyController.text;
+      final phoneNumber = _phoneController.text;
       final pin = _pinController.text;
 
       final normalizedEmail = email.trim();
       if (displayName.trim().isEmpty) throw Exception('Please enter your full name.');
       if (normalizedEmail.isEmpty || !normalizedEmail.contains('@')) throw Exception('Please enter a valid email.');
+      if (companyName.trim().isEmpty) throw Exception('Please enter your company name.');
+      if (phoneNumber.trim().isEmpty) throw Exception('Please enter your phone number.');
+
+      if (_codeSentAt == null) {
+        throw Exception('Please click “Send code” first.');
+      }
+      final elapsed = DateTime.now().difference(_codeSentAt!);
+      if (elapsed >= _cooldown) {
+        throw Exception('Verification code expired. Please resend the code.');
+      }
 
       // Password rules: >= 8 chars, and not too easy.
       if (password.trim().length < 8) throw Exception('Password must be at least 8 characters.');
@@ -127,6 +145,8 @@ class _RegisterPageState extends State<RegisterPage> {
       await widget.appState.auth.verifySignupEmailCode(
         email: normalizedEmail,
         displayName: displayName,
+        companyName: companyName,
+        phoneNumber: phoneNumber,
         password: password,
         code: code,
         pin: pin,
@@ -213,17 +233,20 @@ class _RegisterPageState extends State<RegisterPage> {
           ),
           const SizedBox(height: AppSpacing.md),
           TextField(
-            controller: _passwordController,
-            obscureText: _obscure,
-            decoration: InputDecoration(
-              labelText: 'Password',
-              helperText: 'Min 8 chars • Upper + lower + number',
-              prefixIcon: const Icon(Icons.password),
-              suffixIcon: IconButton(
-                onPressed: () => setState(() => _obscure = !_obscure),
-                icon: Icon(_obscure ? Icons.visibility : Icons.visibility_off),
-                color: cs.onSurfaceVariant,
-              ),
+            controller: _companyController,
+            decoration: const InputDecoration(
+              labelText: 'Company name',
+              prefixIcon: Icon(Icons.apartment_outlined),
+            ),
+            textInputAction: TextInputAction.next,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          TextField(
+            controller: _phoneController,
+            keyboardType: TextInputType.phone,
+            decoration: const InputDecoration(
+              labelText: 'Phone number',
+              prefixIcon: Icon(Icons.phone_outlined),
             ),
             textInputAction: TextInputAction.next,
           ),
@@ -237,6 +260,23 @@ class _RegisterPageState extends State<RegisterPage> {
             ),
             maxLength: 4,
             buildCounter: (context, {required currentLength, required isFocused, maxLength}) => null,
+            textInputAction: TextInputAction.next,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          TextField(
+            controller: _passwordController,
+            obscureText: _obscure,
+            decoration: InputDecoration(
+              labelText: 'Password',
+              helperText: 'Min 8 chars • Upper + lower + number',
+              prefixIcon: const Icon(Icons.password),
+              suffixIcon: IconButton(
+                onPressed: () => setState(() => _obscure = !_obscure),
+                icon: Icon(_obscure ? Icons.visibility : Icons.visibility_off),
+                color: cs.onSurfaceVariant,
+              ),
+            ),
+            textInputAction: TextInputAction.done,
             onSubmitted: (_) => _submit(),
           ),
           const SizedBox(height: AppSpacing.lg),
