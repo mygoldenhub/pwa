@@ -153,7 +153,7 @@ class _RegisterPageState extends State<RegisterPage> {
       );
 
       if (!mounted) return;
-      context.go(AppRoutes.products);
+      context.go(AppRoutes.cart);
     } catch (e) {
       debugPrint('Register failed: $e');
       if (!mounted) return;
@@ -176,6 +176,8 @@ class _RegisterPageState extends State<RegisterPage> {
       title: 'Create account',
       subtitle: 'Enter your details to get started.',
       icon: Icons.person_add_alt_1,
+      showLogo: false,
+      showHeader: true,
       showBack: true,
       onBack: () => context.go(AppRoutes.welcome),
       child: Column(

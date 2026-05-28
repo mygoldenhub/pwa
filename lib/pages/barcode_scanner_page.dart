@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:pwa/components/app_header.dart';
 import 'package:pwa/theme.dart';
 
 class BarcodeScannerPage extends StatefulWidget {
@@ -12,9 +13,37 @@ class BarcodeScannerPage extends StatefulWidget {
 }
 
 class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
-  final MobileScannerController _controller = MobileScannerController(autoStart: true);
+  final MobileScannerController _controller = MobileScannerController(autoStart: false);
   bool _didReturn = false;
   String? _lastValue;
+  MobileScannerException? _lastError;
+  bool _starting = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startScanner());
+  }
+
+  Future<void> _startScanner() async {
+    if (!mounted) return;
+    setState(() {
+      _starting = true;
+      _lastError = null;
+    });
+    try {
+      await _controller.start();
+    } catch (e) {
+      debugPrint('Failed to start scanner: $e');
+      if (!mounted) return;
+      setState(() {
+        _lastError = e is MobileScannerException ? e : null;
+      });
+    } finally {
+      if (!mounted) return;
+      setState(() => _starting = false);
+    }
+  }
 
   @override
   void dispose() {
@@ -33,10 +62,9 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-        title: const Text('Scan barcode'),
+      appBar: AppImpactHeader(
+        title: 'Scan barcode',
+        tone: AppHeaderTone.dark,
         actions: [
           IconButton(
             tooltip: 'Toggle torch',
@@ -47,32 +75,36 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
                 debugPrint('Torch toggle failed: $e');
               }
             },
-            icon: const Icon(Icons.flashlight_on),
+            icon: const Icon(Icons.flashlight_on, color: Colors.white),
           ),
         ],
       ),
       body: Stack(
         fit: StackFit.expand,
         children: [
-          MobileScanner(
-            controller: _controller,
-            onDetect: (capture) {
-              if (_didReturn) return;
-              final barcodes = capture.barcodes;
-              if (barcodes.isEmpty) return;
-              final raw = barcodes.first.rawValue;
-              if (raw == null || raw.trim().isEmpty) return;
+          if (_starting)
+            const Center(child: CircularProgressIndicator.adaptive())
+          else
+            MobileScanner(
+              controller: _controller,
+              onDetect: (capture) {
+                if (_didReturn) return;
+                final barcodes = capture.barcodes;
+                if (barcodes.isEmpty) return;
+                final raw = barcodes.first.rawValue;
+                if (raw == null || raw.trim().isEmpty) return;
 
-              final value = raw.trim();
-              if (_lastValue == value) return;
-              _lastValue = value;
-              _returnBarcode(value);
-            },
-            errorBuilder: (context, error) {
-              debugPrint('MobileScanner error: $error');
-              return _ScannerErrorState(error: error);
-            },
-          ),
+                final value = raw.trim();
+                if (_lastValue == value) return;
+                _lastValue = value;
+                _returnBarcode(value);
+              },
+              errorBuilder: (context, error) {
+                debugPrint('MobileScanner error: $error');
+                _lastError = error;
+                return _ScannerErrorState(error: error, onRetry: _startScanner);
+              },
+            ),
           const _ScannerOverlay(),
           Align(
             alignment: Alignment.bottomCenter,
@@ -88,6 +120,17 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white),
                       textAlign: TextAlign.center,
                     ),
+                    if (kIsWeb) ...[
+                      const SizedBox(height: AppSpacing.xs),
+                      Text(
+                        'Tip: to use ManyCam (virtual camera), select it in your browser\'s camera permission picker (address bar → camera). Flutter can\'t force-select ManyCam from inside the app.',
+                        style: Theme.of(context)
+                            .textTheme
+                            .labelSmall
+                            ?.copyWith(color: Colors.white.withValues(alpha: 0.85), height: 1.35),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
                     const SizedBox(height: AppSpacing.md),
                     Row(
                       children: [
@@ -119,6 +162,18 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
                         ),
                       ],
                     ),
+                    if (_lastError != null) ...[
+                      const SizedBox(height: AppSpacing.sm),
+                      SizedBox(
+                        width: double.infinity,
+                        child: TextButton.icon(
+                          onPressed: _startScanner,
+                          style: TextButton.styleFrom(foregroundColor: Colors.white),
+                          icon: const Icon(Icons.refresh, color: Colors.white),
+                          label: const Text('Retry camera'),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -132,7 +187,8 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
 
 class _ScannerErrorState extends StatelessWidget {
   final MobileScannerException error;
-  const _ScannerErrorState({required this.error});
+  final VoidCallback onRetry;
+  const _ScannerErrorState({required this.error, required this.onRetry});
 
   @override
   Widget build(BuildContext context) {
@@ -158,11 +214,22 @@ class _ScannerErrorState extends StatelessWidget {
                 Text('Camera unavailable', style: Theme.of(context).textTheme.titleLarge?.semiBold),
                 const SizedBox(height: AppSpacing.xs),
                 Text(
-                  'Please allow camera access, or enter the barcode manually.',
+                  kIsWeb
+                      ? 'Please allow camera access in your browser. If you want ManyCam, select it in the browser\'s camera picker (address bar → camera).'
+                      : 'Please allow camera access, or enter the barcode manually.',
                   style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: AppSpacing.lg),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: onRetry,
+                    icon: Icon(Icons.refresh, color: cs.primary),
+                    label: const Text('Retry camera'),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.sm),
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(

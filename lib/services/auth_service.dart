@@ -6,6 +6,8 @@ import 'package:pwa/supabase/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class AuthService extends ChangeNotifier {
+  static const Duration _authTimeout = Duration(seconds: 20);
+
   static const _prefsKeyPinEnabled = 'auth.pin_enabled';
   static const _prefsKeyLastEmail = 'auth.last_email';
   static const _prefsKeySavedPasswordPrefix = 'auth.saved_password.';
@@ -305,14 +307,15 @@ class AuthService extends ChangeNotifier {
       if (normalized.isEmpty || !normalized.contains('@')) throw Exception('Please enter a valid email.');
       _validatePasswordOrThrow(password);
 
-      final res = await SupabaseConfig.auth.signUp(
+      final res = await SupabaseConfig.auth
+          .signUp(
         email: normalized,
         password: password,
         data: {
           // Stored in auth.users.user_metadata (and available as a hint for profile creation).
           'display_name': displayName.trim(),
         },
-      );
+      ).timeout(_authTimeout);
 
       final supaUser = res.user;
       if (supaUser == null) throw Exception('Sign up failed. Please try again.');
@@ -325,7 +328,9 @@ class AuthService extends ChangeNotifier {
       final session = SupabaseConfig.auth.currentSession;
       if (session == null) {
         try {
-          await SupabaseConfig.auth.signInWithPassword(email: normalized, password: password);
+            await SupabaseConfig.auth
+                .signInWithPassword(email: normalized, password: password)
+                .timeout(_authTimeout);
         } on AuthException catch (e) {
           throw Exception(_friendlyAuthMessage(e));
         }
@@ -410,13 +415,14 @@ class AuthService extends ChangeNotifier {
       }
 
       // 2) Create Supabase Auth user.
-      final res = await SupabaseConfig.auth.signUp(
+      final res = await SupabaseConfig.auth
+          .signUp(
         email: normalizedEmail,
         password: password,
         data: {
           'display_name': displayName.trim(),
         },
-      );
+      ).timeout(_authTimeout);
 
       final supaUser = res.user;
       if (supaUser == null) throw Exception('Sign up failed. Please try again.');
@@ -425,7 +431,9 @@ class AuthService extends ChangeNotifier {
       final session = SupabaseConfig.auth.currentSession;
       if (session == null) {
         try {
-          await SupabaseConfig.auth.signInWithPassword(email: normalizedEmail, password: password);
+          await SupabaseConfig.auth
+              .signInWithPassword(email: normalizedEmail, password: password)
+              .timeout(_authTimeout);
         } on AuthException catch (e) {
           throw Exception(_friendlyAuthMessage(e));
         }
@@ -535,13 +543,15 @@ class AuthService extends ChangeNotifier {
 
       // Supabase decides whether it sends a magic link or an OTP code based on your Auth settings + templates.
       // This call requests an OTP-based sign-in/signup.
-      await SupabaseConfig.auth.signInWithOtp(
+      await SupabaseConfig.auth
+          .signInWithOtp(
         email: normalized,
         shouldCreateUser: true,
         data: {
           'display_name': displayName.trim(),
         },
-      );
+      )
+          .timeout(_authTimeout);
     } on AuthException catch (e) {
       debugPrint('AuthService.requestSignupEmailCode auth error: ${e.message}');
       throw Exception(_friendlyAuthMessage(e));
@@ -575,23 +585,27 @@ class AuthService extends ChangeNotifier {
       if (companyName.trim().isEmpty) throw Exception('Please enter your company name.');
       if (phoneNumber.trim().isEmpty) throw Exception('Please enter your phone number.');
 
-      final res = await SupabaseConfig.auth.verifyOTP(
+      final res = await SupabaseConfig.auth
+          .verifyOTP(
         type: OtpType.signup,
         email: normalized,
         token: token,
-      );
+      )
+          .timeout(_authTimeout);
 
       final supaUser = res.user ?? SupabaseConfig.auth.currentUser;
       if (supaUser == null) throw Exception('Verification succeeded, but no user was returned. Please try signing in.');
 
       // Attach password to the now-authenticated user.
       try {
-        await SupabaseConfig.auth.updateUser(UserAttributes(
+        await SupabaseConfig.auth
+            .updateUser(UserAttributes(
           password: password,
           data: {
             'display_name': displayName.trim(),
           },
-        ));
+        ))
+            .timeout(_authTimeout);
       } on AuthException catch (e) {
         debugPrint('AuthService.verifySignupEmailCode updateUser error: ${e.message}');
         throw Exception(_friendlyAuthMessage(e));
@@ -733,7 +747,9 @@ class AuthService extends ChangeNotifier {
     notifyListeners();
     try {
       final normalized = email.trim();
-      final res = await SupabaseConfig.auth.signInWithPassword(email: normalized, password: password);
+      final res = await SupabaseConfig.auth
+          .signInWithPassword(email: normalized, password: password)
+          .timeout(_authTimeout);
       final supaUser = res.user;
       if (supaUser == null) throw Exception('Sign in failed. Please try again.');
       final profile = await _loadOrCreateProfile(supaUser, displayNameHint: null);
@@ -788,7 +804,9 @@ class AuthService extends ChangeNotifier {
       // or (b) complete signOut on failure. Otherwise the auth listener may
       // briefly publish a signed-in user and the router can redirect.
       _holdProfileUntilPinVerified = true;
-      final res = await SupabaseConfig.auth.signInWithPassword(email: normalized, password: savedPassword);
+      final res = await SupabaseConfig.auth
+          .signInWithPassword(email: normalized, password: savedPassword)
+          .timeout(_authTimeout);
       final supaUser = res.user;
       if (supaUser == null) throw Exception('Sign in failed. Please try again.');
 
@@ -883,7 +901,7 @@ class AuthService extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
     try {
-      await SupabaseConfig.auth.signOut();
+      await SupabaseConfig.auth.signOut().timeout(_authTimeout);
       _currentUser = null;
       notifyListeners();
     } catch (e) {

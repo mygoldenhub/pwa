@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/app_state.dart';
-import 'package:pwa/components/app_logo.dart';
+import 'package:pwa/components/app_header.dart';
 import 'package:pwa/models/product.dart';
 import 'package:pwa/nav.dart';
 import 'package:pwa/theme.dart';
@@ -73,7 +73,7 @@ class _ProductsPageState extends State<ProductsPage> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         _showSavedNotification();
-        context.replace(AppRoutes.products);
+        context.replace(AppRoutes.cart);
       });
     }
   }
@@ -110,25 +110,8 @@ class _ProductsPageState extends State<ProductsPage> {
         }).toList();
 
         return Scaffold(
-          appBar: AppBar(
-            leadingWidth: 240,
-            leading: Padding(
-              padding: const EdgeInsets.only(left: 12),
-              child: Center(
-                child: GestureDetector(
-                  onTap: () => context.go(AppRoutes.welcome),
-                  child: const AppCornerBrand(logoSize: 42),
-                ),
-              ),
-            ),
-            title: const Text('Products'),
-            actions: [
-              IconButton(
-                tooltip: 'Add product',
-                onPressed: _openNewProduct,
-                icon: Icon(Icons.add, color: cs.onSurface),
-              ),
-            ],
+          appBar: AppImpactHeader(
+            title: 'Cart',
           ),
           body: SafeArea(
             child: Padding(
@@ -142,8 +125,8 @@ class _ProductsPageState extends State<ProductsPage> {
                   Expanded(
                     child: filtered.isEmpty
                         ? _EmptyState(
-                            title: 'No products yet',
-                            subtitle: 'Add your first product to start scanning and selling.',
+                            title: 'Your cart is empty',
+                            subtitle: 'Scan or add an item to get started.',
                             onPrimaryAction: _openNewProduct,
                           )
                         : ListView.separated(

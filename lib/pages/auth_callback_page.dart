@@ -39,7 +39,7 @@ class _AuthCallbackPageState extends State<AuthCallbackPage> {
       await Future<void>.delayed(const Duration(milliseconds: 150));
 
       if (!mounted) return;
-      context.go(widget.appState.auth.isSignedIn ? AppRoutes.products : AppRoutes.login);
+      context.go(widget.appState.auth.isSignedIn ? AppRoutes.cart : AppRoutes.login);
     } catch (e) {
       debugPrint('AuthCallbackPage: failed to complete auth from URL: $e');
       if (!mounted) return;

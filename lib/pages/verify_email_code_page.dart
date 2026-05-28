@@ -122,7 +122,7 @@ class _VerifyEmailCodePageState extends State<VerifyEmailCodePage> {
         pin: _pinController.text,
       );
       if (!mounted) return;
-      context.go(AppRoutes.products);
+      context.go(AppRoutes.cart);
     } catch (e) {
       debugPrint('VerifyEmailCodePage: verify failed: $e');
       if (!mounted) return;

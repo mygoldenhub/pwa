@@ -163,7 +163,7 @@ class AppSemanticColors {
 class AppAssets {
   static const String logo = 'assets/images/03c69dd3-b418-42c0-97a5-9bdcc1c0f979.jpg';
   /// Logo used in the top-left corner brand (non-dashboard pages).
-  static const String cornerLogo = 'assets/images/cornerlogo.png';
+  static const String cornerLogo = 'assets/images/cornerlogo.jpg';
 }
 
 /// Font size constants

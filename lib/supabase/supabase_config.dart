@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/foundation.dart';
 
@@ -38,6 +40,8 @@ class SupabaseConfig {
 
 /// Generic database service for CRUD operations
 class SupabaseService {
+  static const Duration _defaultTimeout = Duration(seconds: 20);
+
   /// Select multiple records from a table
   static Future<List<Map<String, dynamic>>> select(
     String table, {
@@ -46,6 +50,7 @@ class SupabaseService {
     String? orderBy,
     bool ascending = true,
     int? limit,
+    Duration timeout = _defaultTimeout,
   }) async {
     try {
       dynamic query = SupabaseConfig.client.from(table).select(select ?? '*');
@@ -67,7 +72,8 @@ class SupabaseService {
         query = query.limit(limit);
       }
 
-      return await query;
+      final res = await (query as Future).timeout(timeout);
+      return (res as List).cast<Map<String, dynamic>>();
     } catch (e) {
       throw _handleDatabaseError('select', table, e);
     }
@@ -78,6 +84,7 @@ class SupabaseService {
     String table, {
     String? select,
     required Map<String, dynamic> filters,
+    Duration timeout = _defaultTimeout,
   }) async {
     try {
       dynamic query = SupabaseConfig.client.from(table).select(select ?? '*');
@@ -86,7 +93,8 @@ class SupabaseService {
         query = query.eq(entry.key, entry.value);
       }
 
-      return await query.maybeSingle();
+      final res = await (query.maybeSingle() as Future).timeout(timeout);
+      return res as Map<String, dynamic>?;
     } catch (e) {
       throw _handleDatabaseError('selectSingle', table, e);
     }
@@ -96,9 +104,11 @@ class SupabaseService {
   static Future<List<Map<String, dynamic>>> insert(
     String table,
     Map<String, dynamic> data,
+    {Duration timeout = _defaultTimeout}
   ) async {
     try {
-      return await SupabaseConfig.client.from(table).insert(data).select();
+      final res = await SupabaseConfig.client.from(table).insert(data).select().timeout(timeout);
+      return (res as List).cast<Map<String, dynamic>>();
     } catch (e) {
       throw _handleDatabaseError('insert', table, e);
     }
@@ -108,9 +118,11 @@ class SupabaseService {
   static Future<List<Map<String, dynamic>>> insertMultiple(
     String table,
     List<Map<String, dynamic>> data,
+    {Duration timeout = _defaultTimeout}
   ) async {
     try {
-      return await SupabaseConfig.client.from(table).insert(data).select();
+      final res = await SupabaseConfig.client.from(table).insert(data).select().timeout(timeout);
+      return (res as List).cast<Map<String, dynamic>>();
     } catch (e) {
       throw _handleDatabaseError('insertMultiple', table, e);
     }
@@ -121,6 +133,7 @@ class SupabaseService {
     String table,
     Map<String, dynamic> data, {
     required Map<String, dynamic> filters,
+    Duration timeout = _defaultTimeout,
   }) async {
     try {
       dynamic query = SupabaseConfig.client.from(table).update(data);
@@ -129,7 +142,8 @@ class SupabaseService {
         query = query.eq(entry.key, entry.value);
       }
 
-      return await query.select();
+      final res = await (query.select() as Future).timeout(timeout);
+      return (res as List).cast<Map<String, dynamic>>();
     } catch (e) {
       throw _handleDatabaseError('update', table, e);
     }
@@ -139,6 +153,7 @@ class SupabaseService {
   static Future<void> delete(
     String table, {
     required Map<String, dynamic> filters,
+    Duration timeout = _defaultTimeout,
   }) async {
     try {
       dynamic query = SupabaseConfig.client.from(table).delete();
@@ -147,7 +162,7 @@ class SupabaseService {
         query = query.eq(entry.key, entry.value);
       }
 
-      await query;
+      await (query as Future).timeout(timeout);
     } catch (e) {
       throw _handleDatabaseError('delete', table, e);
     }
@@ -163,6 +178,9 @@ class SupabaseService {
     String table,
     dynamic error,
   ) {
+    if (error is TimeoutException) {
+      return 'Request timed out while performing $operation on $table. Please check your connection and try again.';
+    }
     if (error is PostgrestException) {
       return 'Failed to $operation from $table: ${error.message}';
     } else {

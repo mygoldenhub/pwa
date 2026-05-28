@@ -25,9 +25,14 @@ class AppShellPage extends StatelessWidget {
         indicatorColor: cs.primaryContainer,
         destinations: [
           NavigationDestination(
-            icon: Icon(Icons.inventory_2_outlined, color: cs.onSurfaceVariant),
-            selectedIcon: Icon(Icons.inventory_2, color: cs.primary),
-            label: 'Products',
+            icon: Icon(Icons.shopping_cart_outlined, color: cs.onSurfaceVariant),
+            selectedIcon: Icon(Icons.shopping_cart, color: cs.primary),
+            label: 'Cart',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.receipt_long_outlined, color: cs.onSurfaceVariant),
+            selectedIcon: Icon(Icons.receipt_long, color: cs.primary),
+            label: 'Invoice',
           ),
           NavigationDestination(
             icon: Icon(Icons.person_outline, color: cs.onSurfaceVariant),

@@ -17,6 +17,7 @@ class AuthScaffold extends StatelessWidget {
   final IconData icon;
   final Widget child;
   final bool showLogo;
+  final bool showHeader;
   final bool showBack;
   final VoidCallback? onBack;
   final EdgeInsetsGeometry? padding;
@@ -28,6 +29,7 @@ class AuthScaffold extends StatelessWidget {
     required this.child,
     this.subtitle,
     this.showLogo = true,
+    this.showHeader = true,
     this.showBack = false,
     this.onBack,
     this.padding,
@@ -79,14 +81,15 @@ class AuthScaffold extends StatelessWidget {
                   ),
                 ),
               ),
-              Positioned(
-                top: 10,
-                left: 12,
-                child: GestureDetector(
-                  onTap: () => context.go(AppRoutes.welcome),
-                  child: const AppCornerBrand(logoSize: 51),
+              if (showLogo)
+                Positioned(
+                  top: 10,
+                  left: 12,
+                  child: GestureDetector(
+                    onTap: () => context.go(AppRoutes.welcome),
+                    child: const AppCornerBrand(logoSize: 51),
+                  ),
                 ),
-              ),
               Center(
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 520),
@@ -104,61 +107,50 @@ class AuthScaffold extends StatelessWidget {
                               icon: Icon(Icons.arrow_back, color: cs.onSurface),
                             ),
                           ),
-                        Container(
-                          padding: AppSpacing.paddingLg,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(AppRadius.xl),
-                            color: cs.surface,
-                            border: Border.all(
-                                color: cs.outline.withValues(alpha: 0.12)),
-                          ),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 52,
-                                height: 52,
-                                decoration: BoxDecoration(
-                                  borderRadius:
-                                      BorderRadius.circular(AppRadius.xl),
-                                  color: cs.surfaceContainerHighest,
-                                  border: Border.all(
-                                    color: cs.outline.withValues(alpha: 0.14),
+                        if (showHeader) ...[
+                          Container(
+                            padding: AppSpacing.paddingLg,
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(AppRadius.xl),
+                              color: cs.surface,
+                              border: Border.all(color: cs.outline.withValues(alpha: 0.12)),
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 52,
+                                  height: 52,
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(AppRadius.xl),
+                                    color: cs.surfaceContainerHighest,
+                                    border: Border.all(color: cs.outline.withValues(alpha: 0.14)),
+                                  ),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(6),
+                                    child: Icon(icon, color: cs.primary),
                                   ),
                                 ),
-                                child: Padding(
-                                  padding: const EdgeInsets.all(6),
-                                  child: Icon(icon, color: cs.primary),
-                                ),
-                              ),
-                              const SizedBox(width: AppSpacing.md),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      title,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleLarge
-                                          ?.semiBold,
-                                    ),
-                                    if (subtitle != null) ...[
-                                      const SizedBox(height: AppSpacing.xs),
-                                      Text(
-                                        subtitle!,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodyMedium
-                                            ?.withColor(cs.onSurfaceVariant),
-                                      ),
+                                const SizedBox(width: AppSpacing.md),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(title, style: Theme.of(context).textTheme.titleLarge?.semiBold),
+                                      if (subtitle != null) ...[
+                                        const SizedBox(height: AppSpacing.xs),
+                                        Text(
+                                          subtitle!,
+                                          style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
+                                        ),
+                                      ],
                                     ],
-                                  ],
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: AppSpacing.lg),
+                          const SizedBox(height: AppSpacing.lg),
+                        ],
                         AnimatedSwitcher(
                           duration: const Duration(milliseconds: 200),
                           switchInCurve: Curves.easeOutCubic,

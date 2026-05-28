@@ -1,5 +1,3 @@
-import 'dart:ui' show ImageFilter;
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -13,8 +11,8 @@ class WelcomePage extends StatefulWidget {
   const WelcomePage({super.key, required this.appState});
 
   // IMPORTANT: These must exist under your project's Assets panel.
-  static const String _bgAssetMobile = 'assets/images/mobile-file.png';
-  static const String _bgAssetWebDesktop = 'assets/images/web-file.png';
+  static const String _bgAssetMobile = 'assets/images/mobile-file.jpg';
+  static const String _bgAssetWebDesktop = 'assets/images/web-file.jpg';
   static const double _mobileBreakpointWidth = 650;
 
   @override
@@ -22,15 +20,6 @@ class WelcomePage extends StatefulWidget {
 }
 
 class _WelcomePageState extends State<WelcomePage> {
-  final _displayNameController = TextEditingController();
-  final _companyController = TextEditingController();
-  final _emailController = TextEditingController();
-  final _phoneController = TextEditingController();
-  final _passwordController = TextEditingController();
-  final _pinController = TextEditingController();
-  bool _obscure = true;
-  bool _submitting = false;
-
   static bool _isMobilePlatform() {
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
@@ -53,45 +42,11 @@ class _WelcomePageState extends State<WelcomePage> {
   }
 
   @override
-  void dispose() {
-    _displayNameController.dispose();
-    _companyController.dispose();
-    _emailController.dispose();
-    _phoneController.dispose();
-    _passwordController.dispose();
-    _pinController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submit() async {
-    FocusScope.of(context).unfocus();
-    if (_submitting) return;
-    setState(() => _submitting = true);
-    try {
-      await widget.appState.auth.registerTradeAccount(
-        displayName: _displayNameController.text,
-        companyName: _companyController.text,
-        email: _emailController.text,
-        phoneNumber: _phoneController.text,
-        password: _passwordController.text,
-        pin: _pinController.text,
-      );
-      if (!mounted) return;
-      context.go(AppRoutes.products);
-    } catch (e) {
-      debugPrint('WelcomePage register failed: $e');
-      if (!mounted) return;
-      final msg = e.toString().replaceFirst('Exception: ', '');
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-    } finally {
-      if (mounted) setState(() => _submitting = false);
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final isBusy = widget.appState.auth.isLoading || _submitting;
+    final isBusy = widget.appState.auth.isLoading;
+    final size = MediaQuery.sizeOf(context);
+    final isCompactHeight = size.height < 740;
 
     return Scaffold(
       body: Stack(
@@ -124,7 +79,12 @@ class _WelcomePageState extends State<WelcomePage> {
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: [Colors.black.withValues(alpha: 0.60), Colors.black.withValues(alpha: 0.12)],
+                  // Stronger overlay to keep text readable over bright photos.
+                  colors: [
+                    Colors.black.withValues(alpha: 0.84),
+                    Colors.black.withValues(alpha: 0.62),
+                    Colors.black.withValues(alpha: 0.36),
+                  ],
                 ),
               ),
             ),
@@ -134,46 +94,49 @@ class _WelcomePageState extends State<WelcomePage> {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 560),
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.lg, AppSpacing.lg, AppSpacing.xl),
+                  padding: EdgeInsets.fromLTRB(
+                    AppSpacing.lg,
+                    isCompactHeight ? AppSpacing.md : AppSpacing.lg,
+                    AppSpacing.lg,
+                    isCompactHeight ? AppSpacing.lg : AppSpacing.xl,
+                  ),
                   child: LayoutBuilder(
                     builder: (context, constraints) {
-                      return SingleChildScrollView(
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                          child: IntrinsicHeight(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const SizedBox(height: AppSpacing.sm),
-                                const _WelcomeBrandHeader(),
-                                const SizedBox(height: AppSpacing.lg),
-                                TweenAnimationBuilder<double>(
-                                  tween: Tween(begin: 0.0, end: 1.0),
-                                  duration: const Duration(milliseconds: 520),
-                                  curve: Curves.easeOutCubic,
-                                  builder: (context, t, child) => Transform.translate(
-                                    offset: Offset(0, 16 * (1 - t)),
-                                    child: Opacity(opacity: t, child: child),
-                                  ),
-                                  child: _WelcomeRegisterCard(
-                                    displayNameController: _displayNameController,
-                                    companyController: _companyController,
-                                    emailController: _emailController,
-                                    phoneController: _phoneController,
-                                    passwordController: _passwordController,
-                                    pinController: _pinController,
-                                    obscure: _obscure,
-                                    submitting: isBusy,
-                                    onToggleObscure: () => setState(() => _obscure = !_obscure),
-                                    onContinue: isBusy ? null : _submit,
-                                    onExistingAccount: isBusy ? null : () => context.go(AppRoutes.login),
-                                  ),
-                                ),
-                                const SizedBox(height: AppSpacing.lg),
-                              ],
+                      // Keep the welcome screen to a single viewport (no scrolling).
+                      return Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          SizedBox(height: isCompactHeight ? 0 : AppSpacing.sm),
+                          _WelcomeBrandHeader(compact: isCompactHeight),
+                          SizedBox(
+                              height: isCompactHeight
+                                  ? AppSpacing.md
+                                  : AppSpacing.lg),
+                          TweenAnimationBuilder<double>(
+                            tween: Tween(begin: 0.0, end: 1.0),
+                            duration: const Duration(milliseconds: 520),
+                            curve: Curves.easeOutCubic,
+                            builder: (context, t, child) => Transform.translate(
+                              offset: Offset(0, 14 * (1 - t)),
+                              child: Opacity(opacity: t, child: child),
+                            ),
+                            child: _EntryGateCard(
+                              busy: isBusy,
+                              onExisting: isBusy
+                                  ? null
+                                  : () => context.go(AppRoutes.login),
+                              onNew: isBusy
+                                  ? null
+                                  : () => context.go(AppRoutes.register),
+                              compact: isCompactHeight,
                             ),
                           ),
-                        ),
+                          SizedBox(
+                              height: isCompactHeight
+                                  ? AppSpacing.sm
+                                  : AppSpacing.md),
+                          _WelcomeDisclaimer(compact: isCompactHeight),
+                        ],
                       );
                     },
                   ),
@@ -188,7 +151,8 @@ class _WelcomePageState extends State<WelcomePage> {
 }
 
 class _WelcomeBrandHeader extends StatelessWidget {
-  const _WelcomeBrandHeader();
+  final bool compact;
+  const _WelcomeBrandHeader({required this.compact});
 
   @override
   Widget build(BuildContext context) {
@@ -210,34 +174,38 @@ class _WelcomeBrandHeader extends StatelessWidget {
               borderRadius: BorderRadius.circular(26),
               border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
             ),
-            child: const Padding(
-              padding: EdgeInsets.all(10),
-              child: AppLogo(size: 170, borderRadius: BorderRadius.all(Radius.circular(20))),
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: AppLogo(
+                size: compact ? 136 : 170,
+                borderRadius: const BorderRadius.all(Radius.circular(20)),
+              ),
             ),
           ),
           const SizedBox(height: AppSpacing.sm),
           Text(
             'Scan & Go',
-            style: Theme.of(context).textTheme.displaySmall?.copyWith(color: Colors.white).semiBold,
+            style: (compact
+                    ? Theme.of(context).textTheme.headlineLarge
+                    : Theme.of(context).textTheme.displaySmall)
+                ?.copyWith(
+              color: Colors.white,
+              shadows: [
+                Shadow(
+                    color: Colors.black.withValues(alpha: 0.45),
+                    blurRadius: 18,
+                    offset: const Offset(0, 6)),
+              ],
+            ).semiBold,
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: AppSpacing.xs),
           Text(
-            'STAFFLESS STORE',
+            'Trade portal • Staffless checkout',
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: Colors.white.withValues(alpha: 0.80),
-                  letterSpacing: 1.2,
+                  color: Colors.white.withValues(alpha: 0.96),
                 ),
             textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: AppSpacing.xs),
-          Container(
-            width: 84,
-            height: 2,
-            decoration: BoxDecoration(
-              color: cs.primary.withValues(alpha: 0.95),
-              borderRadius: BorderRadius.circular(4),
-            ),
           ),
         ],
       ),
@@ -245,177 +213,222 @@ class _WelcomeBrandHeader extends StatelessWidget {
   }
 }
 
-class _WelcomeRegisterCard extends StatelessWidget {
-  final TextEditingController displayNameController;
-  final TextEditingController companyController;
-  final TextEditingController emailController;
-  final TextEditingController phoneController;
-  final TextEditingController passwordController;
-  final TextEditingController pinController;
-  final bool obscure;
-  final bool submitting;
-  final VoidCallback onToggleObscure;
-  final VoidCallback? onContinue;
-  final VoidCallback? onExistingAccount;
+class _EntryGateCard extends StatelessWidget {
+  final bool busy;
+  final VoidCallback? onExisting;
+  final VoidCallback? onNew;
+  final bool compact;
 
-  const _WelcomeRegisterCard({
-    required this.displayNameController,
-    required this.companyController,
-    required this.emailController,
-    required this.phoneController,
-    required this.passwordController,
-    required this.pinController,
-    required this.obscure,
-    required this.submitting,
-    required this.onToggleObscure,
-    required this.onContinue,
-    required this.onExistingAccount,
-  });
+  const _EntryGateCard(
+      {required this.busy,
+      required this.onExisting,
+      required this.onNew,
+      required this.compact});
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(AppRadius.xl),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.xl, AppSpacing.lg, AppSpacing.lg),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.10),
-            borderRadius: BorderRadius.circular(AppRadius.xl),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+    return Container(
+      padding: EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        compact ? AppSpacing.md : AppSpacing.lg,
+        AppSpacing.lg,
+        compact ? AppSpacing.md : AppSpacing.lg,
+      ),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AppRadius.xl),
+        // Higher opacity for readability over photos.
+        color: Colors.black.withValues(alpha: 0.34),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.26)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Choose how you want to enter',
+            style: Theme.of(context)
+                .textTheme
+                .titleLarge
+                ?.copyWith(color: Colors.white)
+                .semiBold,
+            textAlign: TextAlign.center,
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('Create account', style: Theme.of(context).textTheme.headlineMedium?.copyWith(color: Colors.white).semiBold, textAlign: TextAlign.center),
-              const SizedBox(height: AppSpacing.xs),
-              Text(
-                'Enter your details. We’ll create your customer in Xero and save your trade account.',
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.white.withValues(alpha: 0.84), height: 1.5),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              _GlassTextField(controller: displayNameController, labelText: 'Full name', icon: Icons.badge_outlined, keyboardType: TextInputType.name, enabled: !submitting),
-              const SizedBox(height: AppSpacing.md),
-              _GlassTextField(controller: companyController, labelText: 'Company', icon: Icons.apartment_outlined, keyboardType: TextInputType.text, enabled: !submitting),
-              const SizedBox(height: AppSpacing.md),
-              _GlassTextField(controller: emailController, labelText: 'Email', icon: Icons.alternate_email, keyboardType: TextInputType.emailAddress, enabled: !submitting),
-              const SizedBox(height: AppSpacing.md),
-              _GlassTextField(controller: phoneController, labelText: 'Mobile number', icon: Icons.phone_outlined, keyboardType: TextInputType.phone, enabled: !submitting),
-              const SizedBox(height: AppSpacing.md),
-              _GlassTextField(controller: pinController, labelText: 'PIN (4 digits)', icon: Icons.pin_outlined, keyboardType: TextInputType.number, enabled: !submitting, maxLength: 4),
-              const SizedBox(height: AppSpacing.md),
-              TextField(
-                controller: passwordController,
-                enabled: !submitting,
-                obscureText: obscure,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: 'Password',
-                  helperText: 'Min 8 chars • Upper + lower + number',
-                  prefixIcon: const Icon(Icons.password),
-                  suffixIcon: IconButton(
-                    onPressed: submitting ? null : onToggleObscure,
-                    icon: Icon(obscure ? Icons.visibility : Icons.visibility_off),
-                    color: Colors.white.withValues(alpha: 0.85),
-                  ),
-                ).applyDefaults(Theme.of(context).inputDecorationTheme).copyWith(
-                      labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.90)),
-                      helperStyle: TextStyle(color: Colors.white.withValues(alpha: 0.75)),
-                      prefixIconColor: Colors.white.withValues(alpha: 0.85),
-                      filled: true,
-                      fillColor: Colors.white.withValues(alpha: 0.10),
-                    ),
-                textInputAction: TextInputAction.done,
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              SizedBox(
-                height: 54,
-                child: FilledButton.icon(
-                  onPressed: onContinue,
-                  icon: submitting
-                      ? SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: cs.onPrimary))
-                      : Icon(Icons.arrow_forward, color: cs.onPrimary),
-                  label: Text(submitting ? 'Creating…' : 'Continue', style: TextStyle(color: cs.onPrimary)),
-                  style: FilledButton.styleFrom(backgroundColor: cs.primary, foregroundColor: cs.onPrimary, padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16)),
-                ),
-              ),
-              const SizedBox(height: AppSpacing.md),
-              const _OrDivider(),
-              const SizedBox(height: AppSpacing.md),
-              OutlinedButton.icon(
-                onPressed: onExistingAccount,
-                icon: const Icon(Icons.person, color: Colors.white),
-                label: const Text('Existing trade account', style: TextStyle(color: Colors.white)),
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: Colors.white.withValues(alpha: 0.25)),
-                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-                ),
-              ),
-            ],
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            'Log in to scan materials and check out without staff assistance.',
+            style: Theme.of(context)
+                .textTheme
+                .bodyMedium
+                ?.copyWith(color: Colors.white.withValues(alpha: 0.92)),
+            textAlign: TextAlign.center,
           ),
-        ),
+          SizedBox(height: compact ? AppSpacing.md : AppSpacing.lg),
+          _GateOptionTile(
+            title: 'Existing trade account',
+            subtitle: 'Sign in with email + PIN (or password).',
+            icon: Icons.verified_user_outlined,
+            trailingIcon: Icons.arrow_forward,
+            onTap: onExisting,
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          _GateOptionTile(
+            title: 'New customer / create account',
+            subtitle:
+                'Register in under a minute — we’ll create your Xero contact.',
+            icon: Icons.person_add_alt_1,
+            trailingIcon: Icons.arrow_forward,
+            onTap: onNew,
+          ),
+          if (busy) ...[
+            const SizedBox(height: AppSpacing.md),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white)),
+                const SizedBox(width: AppSpacing.sm),
+                Text('Please wait…',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Colors.white.withValues(alpha: 0.86))),
+              ],
+            ),
+          ],
+        ],
       ),
     );
   }
 }
 
-class _GlassTextField extends StatelessWidget {
-  final TextEditingController controller;
-  final String labelText;
-  final IconData icon;
-  final TextInputType keyboardType;
-  final bool enabled;
-  final int? maxLength;
-
-  const _GlassTextField({
-    required this.controller,
-    required this.labelText,
-    required this.icon,
-    required this.keyboardType,
-    required this.enabled,
-    this.maxLength,
-  });
+class _WelcomeDisclaimer extends StatelessWidget {
+  final bool compact;
+  const _WelcomeDisclaimer({required this.compact});
 
   @override
   Widget build(BuildContext context) {
-    return TextField(
-      controller: controller,
-      enabled: enabled,
-      keyboardType: keyboardType,
-      maxLength: maxLength,
-      buildCounter: (context, {required currentLength, required isFocused, maxLength}) => null,
-      style: const TextStyle(color: Colors.white),
-      decoration: InputDecoration(
-        labelText: labelText,
-        prefixIcon: Icon(icon),
-      ).applyDefaults(Theme.of(context).inputDecorationTheme).copyWith(
-            labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.90)),
-            prefixIconColor: Colors.white.withValues(alpha: 0.85),
-            filled: true,
-            fillColor: Colors.white.withValues(alpha: 0.10),
-          ),
-      textInputAction: TextInputAction.next,
+    return Container(
+      padding: EdgeInsets.symmetric(
+          horizontal: AppSpacing.md,
+          vertical: compact ? AppSpacing.xs : AppSpacing.sm),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        color: Colors.black.withValues(alpha: 0.22),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+      ),
+      child: Text(
+        'By continuing, you agree to be billed via your trade account and receive invoices by email.',
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: Colors.white.withValues(alpha: 0.88), height: 1.35),
+        textAlign: TextAlign.center,
+      ),
     );
   }
 }
 
-class _OrDivider extends StatelessWidget {
-  const _OrDivider();
+class _GateOptionTile extends StatefulWidget {
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final IconData trailingIcon;
+  final VoidCallback? onTap;
+
+  const _GateOptionTile({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.trailingIcon,
+    required this.onTap,
+  });
+
+  @override
+  State<_GateOptionTile> createState() => _GateOptionTileState();
+}
+
+class _GateOptionTileState extends State<_GateOptionTile> {
+  bool _hovered = false;
+  bool _pressed = false;
 
   @override
   Widget build(BuildContext context) {
-    final style = Theme.of(context).textTheme.labelMedium?.copyWith(color: Colors.white.withValues(alpha: 0.85));
-    return Row(
-      children: [
-        Expanded(child: Divider(color: Colors.white.withValues(alpha: 0.18), height: 1)),
-        Padding(padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md), child: Text('OR', style: style)),
-        Expanded(child: Divider(color: Colors.white.withValues(alpha: 0.18), height: 1)),
-      ],
+    final cs = Theme.of(context).colorScheme;
+    final enabled = widget.onTap != null;
+    final active = enabled && (_hovered || _pressed);
+
+    final bg = active ? cs.primary.withValues(alpha: 0.22) : Colors.white.withValues(alpha: 0.10);
+    final border = active ? cs.primary.withValues(alpha: 0.62) : Colors.white.withValues(alpha: 0.18);
+
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      label: widget.title,
+      child: MouseRegion(
+        cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() {
+          _hovered = false;
+          _pressed = false;
+        }),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          onTapDown: enabled ? (_) => setState(() => _pressed = true) : null,
+          onTapUp: enabled ? (_) => setState(() => _pressed = false) : null,
+          onTapCancel: enabled ? () => setState(() => _pressed = false) : null,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            curve: Curves.easeOut,
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.md),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(AppRadius.lg),
+              color: bg,
+              border: Border.all(color: border),
+            ),
+            child: Row(
+              children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 160),
+                  curve: Curves.easeOut,
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(14),
+                    color: active ? cs.primary.withValues(alpha: 0.18) : Colors.white.withValues(alpha: 0.10),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+                  ),
+                  child: Icon(widget.icon, color: Colors.white),
+                ),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        widget.title,
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                            ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        widget.subtitle,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Colors.white.withValues(alpha: 0.90),
+                              height: 1.35,
+                            ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Icon(widget.trailingIcon, color: Colors.white.withValues(alpha: enabled ? 0.92 : 0.55)),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

@@ -2,7 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/app_state.dart';
-import 'package:pwa/components/app_logo.dart';
+import 'package:pwa/components/app_header.dart';
 import 'package:pwa/models/product.dart';
 import 'package:pwa/nav.dart';
 import 'package:pwa/services/product_service.dart';
@@ -91,7 +91,7 @@ class _ProductFormPageState extends State<ProductFormPage> {
 
       // Always land on Products after a successful save.
       // We also pass an extra so ProductsPage can show a “saved” snackbar.
-      context.go(AppRoutes.products, extra: const {'product_saved': true});
+      context.go(AppRoutes.cart, extra: const {'product_saved': true});
     } catch (e) {
       debugPrint('Product save failed: $e');
       if (!mounted) return;
@@ -108,18 +108,8 @@ class _ProductFormPageState extends State<ProductFormPage> {
     final isBusy = widget.appState.products.isLoading;
 
     return Scaffold(
-      appBar: AppBar(
-        leadingWidth: 240,
-        leading: Padding(
-          padding: const EdgeInsets.only(left: 12),
-          child: Center(
-            child: GestureDetector(
-              onTap: () => context.go(AppRoutes.welcome),
-              child: const AppCornerBrand(logoSize: 42),
-            ),
-          ),
-        ),
-        title: Text(isEdit ? 'Edit product' : 'New product'),
+      appBar: AppImpactHeader(
+        title: isEdit ? 'Edit item' : 'New item',
         actions: [
           TextButton(
             onPressed: isBusy ? null : _save,

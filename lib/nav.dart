@@ -5,6 +5,7 @@ import 'package:pwa/pages/account_page.dart';
 import 'package:pwa/pages/app_shell_page.dart';
 import 'package:pwa/pages/auth_callback_page.dart';
 import 'package:pwa/pages/barcode_scanner_page.dart';
+import 'package:pwa/pages/invoice_page.dart';
 import 'package:pwa/pages/loading_page.dart';
 import 'package:pwa/pages/login_page.dart';
 import 'package:pwa/pages/product_form_page.dart';
@@ -41,9 +42,9 @@ class AppRouter {
         final isApp = loc.startsWith('/app');
 
         if (!ready && !isLoading) return AppRoutes.loading;
-        if (ready && isLoading) return signedIn ? AppRoutes.products : AppRoutes.welcome;
+        if (ready && isLoading) return signedIn ? AppRoutes.cart : AppRoutes.welcome;
         if (!signedIn && isApp) return AppRoutes.welcome;
-        if (signedIn && isAuth) return AppRoutes.products;
+        if (signedIn && isAuth) return AppRoutes.cart;
         return null;
       },
       routes: [
@@ -90,7 +91,7 @@ class AppRouter {
             StatefulShellBranch(
               routes: [
                 GoRoute(
-                  path: AppRoutes.products,
+                  path: AppRoutes.cart,
                   pageBuilder: (context, state) => NoTransitionPage(
                     child: ProductsPage(appState: appState),
                   ),
@@ -121,6 +122,14 @@ class AppRouter {
             StatefulShellBranch(
               routes: [
                 GoRoute(
+                  path: AppRoutes.invoice,
+                  pageBuilder: (context, state) => const NoTransitionPage(child: InvoicePage()),
+                ),
+              ],
+            ),
+            StatefulShellBranch(
+              routes: [
+                GoRoute(
                   path: AppRoutes.account,
                   pageBuilder: (context, state) => NoTransitionPage(
                     child: AccountPage(appState: appState),
@@ -145,10 +154,11 @@ class AppRoutes {
   static const String register = '/register';
   static const String verifyEmail = '/verify-email';
 
-  static const String products = '/app/products';
+  static const String cart = '/app/cart';
+  static const String invoice = '/app/invoice';
   static const String account = '/app/account';
 
-  static const String productNew = '/app/products/new';
-  static const String barcodeScan = '/app/products/scan';
-  static String productEdit(String id) => '/app/products/$id/edit';
+  static const String productNew = '/app/cart/new';
+  static const String barcodeScan = '/app/cart/scan';
+  static String productEdit(String id) => '/app/cart/$id/edit';
 }

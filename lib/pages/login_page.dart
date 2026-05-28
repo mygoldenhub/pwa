@@ -47,7 +47,7 @@ class _LoginPageState extends State<LoginPage> {
         if (email.isEmpty || !email.contains('@')) throw Exception('Please enter a valid email.');
         if (password.trim().isEmpty) throw Exception('Please enter your password.');
         await widget.appState.auth.signIn(email: email, password: password);
-        if (mounted) context.go(AppRoutes.products);
+        if (mounted) context.go(AppRoutes.cart);
         return;
       }
 
@@ -56,7 +56,7 @@ class _LoginPageState extends State<LoginPage> {
       final pin = _pinController.text;
       if (email.isEmpty || !email.contains('@')) throw Exception('Please enter a valid email.');
       await widget.appState.auth.signInWithPin(email: email, pin: pin);
-      if (mounted) context.go(AppRoutes.products);
+      if (mounted) context.go(AppRoutes.cart);
     } catch (e) {
       debugPrint('Login failed: $e');
       if (!mounted) return;
@@ -77,6 +77,8 @@ class _LoginPageState extends State<LoginPage> {
       title: 'Login',
       subtitle: 'Use password, or sign in quickly with your 4-digit PIN.',
       icon: Icons.lock_outline,
+      showLogo: false,
+      showHeader: true,
       showBack: true,
       onBack: () => context.go(AppRoutes.welcome),
       child: Column(

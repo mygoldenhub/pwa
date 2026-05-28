@@ -17,7 +17,7 @@ class PinUnlockPage extends StatelessWidget {
   Widget build(BuildContext context) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!context.mounted) return;
-      context.go(appState.auth.isSignedIn ? AppRoutes.products : AppRoutes.welcome);
+      context.go(appState.auth.isSignedIn ? AppRoutes.cart : AppRoutes.welcome);
     });
 
     return AuthScaffold(
