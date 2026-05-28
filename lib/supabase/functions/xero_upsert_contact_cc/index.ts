@@ -1,13 +1,17 @@
 /// Supabase Edge Function: xero_upsert_contact_cc
 ///
-/// End-to-end flow:
-/// 1) Validate request + parse { fullName, email, companyName, phoneNumber }
-/// 2) Get stored refresh token from Postgres table public.xero_oauth_tokens
-/// 3) Refresh -> access token (and rotate refresh token back into Postgres)
-/// 4) Find contact by EmailAddress (across ALL contacts)
-/// 5) If exists: UPDATE it (set IsCustomer=true + update fields)
-///    Else: CREATE it (IsCustomer=true)
-/// 6) Return { contactId }
+/// Find-or-create a Xero Contact (customer) by email and return its ContactID.
+///
+/// This function is configured with verify_jwt=false so it can be called before
+/// a Supabase account exists.
+///
+/// Required secrets:
+/// - XERO_CLIENT_ID
+/// - XERO_CLIENT_SECRET
+/// - XERO_TENANT_ID
+///
+/// DB requirement:
+/// - public.xero_oauth_tokens must have a row id='default' containing refresh_token.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
@@ -21,10 +25,14 @@ const CORS_HEADERS: Record<string, string> = {
 type JsonRecord = Record<string, unknown>;
 
 type UpsertRequestBody = {
+  // Accept both camelCase and snake_case keys.
   fullName?: string;
+  full_name?: string;
   email?: string;
   companyName?: string;
+  company_name?: string;
   phoneNumber?: string;
+  phone_number?: string;
 };
 
 function jsonResponse(status: number, body: JsonRecord) {
@@ -97,13 +105,8 @@ async function xeroFetchJson(url: string, init: RequestInit) {
   return json as any;
 }
 
-async function getSupabaseUserId(req: Request): Promise<string | null> {
-  // Works only if verify_jwt=true in supabase/functions/config.toml.
-  const auth = req.headers.get("authorization") || "";
-  if (!auth.toLowerCase().startsWith("bearer ")) return null;
-  const jwt = auth.slice("bearer ".length).trim();
-  return decodeJwtPayloadSub(jwt);
-}
+// NOTE: verify_jwt=false, so callers may not have a JWT.
+// We keep the JWT decoding helper above for potential future use.
 
 serve(async (req) => {
   try {
@@ -117,20 +120,19 @@ serve(async (req) => {
 
     const body = (await req.json()) as UpsertRequestBody;
 
-    const fullName = (body.fullName || "").trim();
+    const fullName = (body.fullName || body.full_name || "").trim();
     const emailRaw = (body.email || "").trim();
-    const companyName = (body.companyName || "").trim();
-    const phoneNumber = (body.phoneNumber || "").trim();
+    const companyName = (body.companyName || body.company_name || "").trim();
+    const phoneNumber = (body.phoneNumber || body.phone_number || "").trim();
 
     if (!emailRaw) return jsonResponse(400, { error: "invalid_request", message: "email is required" });
 
     const email = normalizeEmail(emailRaw);
     const { firstName, lastName } = splitName(fullName || companyName || email);
 
-    // Predetermined credentials (you can override by setting secrets in Supabase)
-    const clientId = Deno.env.get("XERO_CLIENT_ID") || "3822E9EC26CC43AC804282846A7F0BFD";
-    const clientSecret = Deno.env.get("XERO_CLIENT_SECRET") || "28amYbNd_0y3uahXnQu0IVLHurEZjPK-grRkQgfJCasFcZyN";
-    const tenantId = Deno.env.get("XERO_TENANT_ID") || "9b0a4fda-f084-4da6-a5ea-d58b26035931";
+    const clientId = requireEnv("XERO_CLIENT_ID");
+    const clientSecret = requireEnv("XERO_CLIENT_SECRET");
+    const tenantId = requireEnv("XERO_TENANT_ID");
 
     // Supabase DB connection for token storage
     const supabaseUrl = requireEnv("SUPABASE_URL");
@@ -228,6 +230,7 @@ serve(async (req) => {
     const phonePayload = phoneNumber ? [{ PhoneType: "MOBILE", PhoneNumber: phoneNumber }] : undefined;
 
     let contactId: string;
+  let createdNew = false;
 
     if (existing?.ContactID) {
       const updateBody: any = {
@@ -238,7 +241,12 @@ serve(async (req) => {
             FirstName: firstName,
             LastName: lastName,
             EmailAddress: email,
+            // NOTE: Xero's IsCustomer/IsSupplier fields are frequently treated as
+            // computed/read-only by the API and may remain false until a sales
+            // transaction exists. We still send it for forward-compat.
             IsCustomer: true,
+            IsSupplier: false,
+            ContactStatus: "ACTIVE",
           },
         ],
       };
@@ -261,6 +269,8 @@ serve(async (req) => {
             LastName: lastName,
             EmailAddress: email,
             IsCustomer: true,
+            IsSupplier: false,
+            ContactStatus: "ACTIVE",
           },
         ],
       };
@@ -275,32 +285,68 @@ serve(async (req) => {
       const created = Array.isArray(createdRes?.Contacts) ? createdRes.Contacts[0] : null;
       contactId = created?.ContactID;
       if (!contactId) throw new Error(`Xero create did not return ContactID: ${JSON.stringify(createdRes)}`);
+      createdNew = true;
     }
 
-    // Optional user sync (best-effort)
-    const userId = await getSupabaseUserId(req);
-    if (userId) {
-      try {
-        const patchRes = await fetch(`${supabaseUrl}/rest/v1/users?id=eq.${encodeURIComponent(userId)}`, {
-          method: "PATCH",
-          headers: {
-            apikey: serviceRole,
-            authorization: `Bearer ${serviceRole}`,
-            "content-type": "application/json",
-            Prefer: "return=minimal",
-          },
-          body: JSON.stringify({ xero_account_id: contactId }),
-        });
-        if (!patchRes.ok) {
-          const t = await patchRes.text();
-          console.warn(`Failed to sync users.xero_account_id: ${patchRes.status} :: ${t}`);
+    // 5) (Optional) Force the contact to appear as a "Customer" in Xero.
+    // In many Xero orgs, `IsCustomer` stays `false` until the contact is used on
+    // a sales transaction (e.g., an ACCREC invoice). If you want that behavior,
+    // set these Edge Function secrets:
+    // - CREATE_DRAFT_SALES_INVOICE_ON_CONTACT_CREATE=true
+    // - XERO_SALES_ACCOUNT_CODE=<a valid revenue account code in your org>
+    // This will create a $0 draft invoice (if your org allows it).
+    const shouldCreateDraftInvoice = (Deno.env.get("CREATE_DRAFT_SALES_INVOICE_ON_CONTACT_CREATE") || "").toLowerCase() === "true";
+    const salesAccountCode = (Deno.env.get("XERO_SALES_ACCOUNT_CODE") || "").trim();
+
+    let draftInvoiceId: string | undefined;
+    if (createdNew && shouldCreateDraftInvoice) {
+      if (!salesAccountCode) {
+        console.warn("CREATE_DRAFT_SALES_INVOICE_ON_CONTACT_CREATE is true but XERO_SALES_ACCOUNT_CODE is not set; skipping invoice creation.");
+      } else {
+        try {
+          const today = new Date().toISOString().slice(0, 10);
+          const invoiceBody: any = {
+            Invoices: [
+              {
+                Type: "ACCREC",
+                Contact: { ContactID: contactId },
+                Date: today,
+                DueDate: today,
+                Status: "DRAFT",
+                LineItems: [
+                  {
+                    Description: "Trade account created",
+                    Quantity: 1,
+                    UnitAmount: 0,
+                    AccountCode: salesAccountCode,
+                  },
+                ],
+              },
+            ],
+          };
+
+          const invoiceRes = await xeroFetchJson("https://api.xero.com/api.xro/2.0/Invoices", {
+            method: "POST",
+            headers: xeroHeaders,
+            body: JSON.stringify(invoiceBody),
+          });
+
+          const createdInvoice = Array.isArray(invoiceRes?.Invoices) ? invoiceRes.Invoices[0] : null;
+          draftInvoiceId = createdInvoice?.InvoiceID;
+        } catch (e) {
+          // Don't fail signup if invoice creation isn't allowed/configured.
+          console.warn(`Failed to create draft invoice to force IsCustomer=true: ${String(e)}`);
         }
-      } catch (e) {
-        console.warn(`Failed to sync users.xero_account_id: ${String(e)}`);
       }
     }
 
-    return jsonResponse(200, { ok: true, contactId, updated: Boolean(existing?.ContactID) });
+    return jsonResponse(200, {
+      ok: true,
+      contactId,
+      updated: Boolean(existing?.ContactID),
+      // Helpful for debugging Xero-side behavior; client can ignore.
+      draftInvoiceId,
+    });
   } catch (e) {
     console.error(`xero_upsert_contact_cc failed: ${String(e)}`);
     return jsonResponse(500, { ok: false, error: "internal_error", message: String(e) });

@@ -187,23 +187,3 @@ class AuthScaffold extends StatelessWidget {
     );
   }
 }
-
-class _Blob extends StatelessWidget {
-  final Color color;
-  final double size;
-  const _Blob({required this.color, required this.size});
-
-  @override
-  Widget build(BuildContext context) {
-    return IgnorePointer(
-      child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          color: color,
-          borderRadius: BorderRadius.circular(size),
-        ),
-      ),
-    );
-  }
-}

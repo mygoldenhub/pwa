@@ -2,7 +2,6 @@ import 'package:flutter/foundation.dart';
 import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:pwa/models/app_user.dart';
-import 'package:pwa/nav.dart';
 import 'package:pwa/supabase/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -345,6 +344,146 @@ class AuthService extends ChangeNotifier {
     }
   }
 
+  /// Primary onboarding flow for this project:
+  /// 1) Upsert Xero customer (by email) and get ContactID
+  /// 2) Create Supabase Auth user (email+password)
+  /// 3) Upsert public.users profile with trade details + Xero ContactID
+  /// 4) Save the user's PIN hash via `public.set_user_pin()`
+  Future<AppUser> registerTradeAccount({
+    required String displayName,
+    required String companyName,
+    required String email,
+    required String phoneNumber,
+    required String password,
+    required String pin,
+  }) async {
+    _isLoading = true;
+    notifyListeners();
+    try {
+      final normalizedEmail = email.trim().toLowerCase();
+      if (displayName.trim().isEmpty) throw Exception('Please enter your full name.');
+      if (companyName.trim().isEmpty) throw Exception('Please enter your company name.');
+      if (phoneNumber.trim().isEmpty) throw Exception('Please enter your phone number.');
+      if (normalizedEmail.isEmpty || !normalizedEmail.contains('@')) throw Exception('Please enter a valid email.');
+      _validatePasswordOrThrow(password);
+      _validatePinOrThrow(pin);
+
+      final exists = await emailExists(email: normalizedEmail);
+      if (exists) throw Exception('An account already exists with this email. Please sign in instead.');
+
+      // 1) Upsert user in Xero (Edge Function) to get Xero ContactID.
+      String xeroContactId;
+      try {
+        const fnName = 'xero_upsert_contact_cc';
+        final debugUrl = SupabaseConfig.edgeFunctionUrl(fnName);
+        debugPrint('AuthService.registerTradeAccount: invoking $fnName at $debugUrl');
+
+        final res = await SupabaseConfig.client.functions
+            .invoke(
+              fnName,
+              body: {
+                'fullName': displayName.trim(),
+                'email': normalizedEmail,
+                'companyName': companyName.trim(),
+                'phoneNumber': phoneNumber.trim(),
+              },
+              headers: const {'content-type': 'application/json'},
+            )
+            .timeout(const Duration(seconds: 18));
+
+        final data = res.data;
+        final maybe = (data is Map) ? data['contactId'] : null;
+        xeroContactId = (maybe is String) ? maybe.trim() : '';
+        if (xeroContactId.isEmpty) {
+          debugPrint('AuthService.registerTradeAccount: $fnName unexpected response: ${res.data}');
+          throw Exception('Failed to create your Xero account. Please try again.');
+        }
+      } catch (e) {
+        debugPrint('AuthService.registerTradeAccount: Xero upsert failed: $e');
+        final msg = e.toString().toLowerCase();
+        if (msg.contains('failed to fetch') || msg.contains('clientfailed') || msg.contains('clientexception')) {
+          throw Exception(
+            'Xero service is unreachable. Please deploy the Edge Function and set its secrets: ${SupabaseConfig.edgeFunctionUrl('xero_upsert_contact_cc')}',
+          );
+        }
+        rethrow;
+      }
+
+      // 2) Create Supabase Auth user.
+      final res = await SupabaseConfig.auth.signUp(
+        email: normalizedEmail,
+        password: password,
+        data: {
+          'display_name': displayName.trim(),
+        },
+      );
+
+      final supaUser = res.user;
+      if (supaUser == null) throw Exception('Sign up failed. Please try again.');
+
+      // Ensure we have a session for RPC + table writes.
+      final session = SupabaseConfig.auth.currentSession;
+      if (session == null) {
+        try {
+          await SupabaseConfig.auth.signInWithPassword(email: normalizedEmail, password: password);
+        } on AuthException catch (e) {
+          throw Exception(_friendlyAuthMessage(e));
+        }
+      }
+
+      // 3) Upsert the profile row with trade fields.
+      try {
+        final now = DateTime.now().toUtc().toIso8601String();
+        await SupabaseService.from('users').upsert({
+          'id': supaUser.id,
+          'email': (supaUser.email ?? normalizedEmail).trim(),
+          'display_name': displayName.trim(),
+          'company_name': companyName.trim(),
+          'phone_number': phoneNumber.trim(),
+          'xero_account_id': xeroContactId,
+          'created_at': now,
+          'updated_at': now,
+        });
+      } on PostgrestException catch (e) {
+        debugPrint('AuthService.registerTradeAccount: profile upsert failed: ${e.message} (code: ${e.code})');
+        // Don't block onboarding if RLS is misconfigured; profile can still be created by server hooks.
+      } catch (e) {
+        debugPrint('AuthService.registerTradeAccount: profile upsert failed: $e');
+      }
+
+      final profile = await _loadOrCreateProfile(supaUser, displayNameHint: displayName);
+
+      // 4) Save PIN hash (server-side).
+      try {
+        await _waitForSessionReady(expectedUserId: supaUser.id);
+        await SupabaseConfig.client.rpc('set_user_pin', params: {'pin_input': pin.trim()});
+        final ok = await _verifyPinViaRpcWithRetry(pin: pin, expectedUserId: supaUser.id);
+        if (!ok) throw Exception('PIN could not be saved correctly. Please try again.');
+
+        _pinEnabled = true;
+        _lastEmail = normalizedEmail;
+        await _savePasswordForEmail(email: normalizedEmail, password: password);
+        await _savePrefs();
+      } on PostgrestException catch (e) {
+        debugPrint('AuthService.registerTradeAccount: set/verify pin failed: ${e.message} (code: ${e.code})');
+        throw _friendlyPinRpcException(e);
+      } catch (e) {
+        debugPrint('AuthService.registerTradeAccount: set/verify pin failed: $e');
+        rethrow;
+      }
+
+      _currentUser = profile;
+      notifyListeners();
+      return profile;
+    } catch (e) {
+      debugPrint('AuthService.registerTradeAccount failed: $e');
+      rethrow;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
   /// Checks whether an Auth user already exists for [email].
   ///
   /// This uses the `check_email_exists` Supabase Edge Function, because the client
@@ -483,7 +622,7 @@ class AuthService extends ChangeNotifier {
         if (data is Map && data['contactId'] is String) {
           xeroContactId = (data['contactId'] as String).trim();
         }
-        if (xeroContactId == null || xeroContactId!.isEmpty) {
+        if (xeroContactId == null || xeroContactId.isEmpty) {
           debugPrint('AuthService.verifySignupEmailCode: $fnName unexpected response: ${res.data}');
           throw Exception('Failed to create your Xero account. Please try again.');
         }

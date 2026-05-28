@@ -1,7 +1,7 @@
 
 [functions.check_email_exists]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/check_email_exists/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -12,7 +12,7 @@ entrypoint = "./functions/check_email_exists/index.ts"
 
 [functions.xero_upsert_contact]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/xero_upsert_contact/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -23,7 +23,7 @@ entrypoint = "./functions/xero_upsert_contact/index.ts"
 
 [functions.xero_upsert_contact_cc]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/xero_upsert_contact_cc/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
