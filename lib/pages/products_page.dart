@@ -112,6 +112,13 @@ class _ProductsPageState extends State<ProductsPage> {
         return Scaffold(
           appBar: AppImpactHeader(
             title: 'Cart',
+            actions: [
+              _HeaderActionButton(
+                label: 'Add product',
+                icon: Icons.add,
+                onTap: _openNewProduct,
+              ),
+            ],
           ),
           body: SafeArea(
             child: Padding(
@@ -180,6 +187,47 @@ class _SearchBar extends StatelessWidget {
       decoration: const InputDecoration(
         labelText: 'Search by name or barcode',
         prefixIcon: Icon(Icons.search),
+      ),
+    );
+  }
+}
+
+class _HeaderActionButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  const _HeaderActionButton({required this.label, required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Semantics(
+      button: true,
+      label: label,
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOutCubic,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: cs.primary,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: cs.primary.withValues(alpha: 0.22)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 18, color: cs.onPrimary),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(color: cs.onPrimary, fontWeight: FontWeight.w800),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

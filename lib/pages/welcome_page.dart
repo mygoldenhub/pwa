@@ -201,7 +201,7 @@ class _WelcomeBrandHeader extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.xs),
           Text(
-            'Trade portal • Staffless checkout',
+            'Trade portal',
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
                   color: Colors.white.withValues(alpha: 0.96),
                 ),
@@ -256,7 +256,7 @@ class _EntryGateCard extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.xs),
           Text(
-            'Log in to scan materials and check out without staff assistance.',
+            'Log in scan materials and check out.',
             style: Theme.of(context)
                 .textTheme
                 .bodyMedium

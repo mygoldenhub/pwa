@@ -179,6 +179,11 @@ class AuthService extends ChangeNotifier {
       _authSub = SupabaseConfig.auth.onAuthStateChange.listen((event) async {
         final supaUser = event.session?.user;
         if (supaUser == null) {
+          // Defensive: if we were in the middle of any auth flow (sign-out, token refresh,
+          // failed PIN verification, etc.) and ended up signed-out, ensure we don't leave
+          // the app in a permanent "loading" state. This directly prevents the Welcome
+          // screen from getting stuck on "Please wait…" and disabling all taps.
+          _isLoading = false;
           _holdProfileUntilPinVerified = false;
           _currentUser = null;
           notifyListeners();
