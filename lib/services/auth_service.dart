@@ -912,12 +912,125 @@ class AuthService extends ChangeNotifier {
     }
   }
 
+  /// Re-fetches the user's profile from `public.users`.
+  ///
+  /// Useful after server-side changes (e.g., admin edits, RLS policy fixes).
+  Future<void> refreshProfile() async {
+    final supaUser = SupabaseConfig.auth.currentUser;
+    if (supaUser == null) return;
+    try {
+      _currentUser = await _loadOrCreateProfile(supaUser, displayNameHint: null);
+    } catch (e) {
+      debugPrint('AuthService.refreshProfile failed: $e');
+    } finally {
+      notifyListeners();
+    }
+  }
+
+  /// Verifies the current user's password.
+  ///
+  /// Supabase doesn't expose a pure "reauth" endpoint on the client; the most
+  /// reliable check is a password sign-in attempt.
+  Future<void> verifyCurrentPassword({required String password}) async {
+    final email = _currentUser?.email.trim() ?? '';
+    if (email.isEmpty) throw Exception('No signed-in user.');
+    final p = password.trim();
+    if (p.isEmpty) throw Exception('Please enter your password.');
+    try {
+      await SupabaseConfig.auth.signInWithPassword(email: email, password: p).timeout(_authTimeout);
+      // If this password is correct, keep it cached to preserve PIN login.
+      await _savePasswordForEmail(email: email, password: p);
+    } on AuthException catch (e) {
+      debugPrint('AuthService.verifyCurrentPassword auth error: ${e.message}');
+      throw Exception(_friendlyAuthMessage(e));
+    } catch (e) {
+      debugPrint('AuthService.verifyCurrentPassword failed: $e');
+      rethrow;
+    }
+  }
+
+  /// Updates the Supabase Auth password after verifying the current password.
+  Future<void> updatePassword({required String currentPassword, required String newPassword}) async {
+    _isLoading = true;
+    notifyListeners();
+    try {
+      await verifyCurrentPassword(password: currentPassword);
+      _validatePasswordOrThrow(newPassword);
+      await SupabaseConfig.auth.updateUser(UserAttributes(password: newPassword.trim())).timeout(_authTimeout);
+
+      final email = _currentUser?.email.trim() ?? '';
+      if (email.isNotEmpty) await _savePasswordForEmail(email: email, password: newPassword.trim());
+    } on AuthException catch (e) {
+      debugPrint('AuthService.updatePassword auth error: ${e.message}');
+      throw Exception(_friendlyAuthMessage(e));
+    } catch (e) {
+      debugPrint('AuthService.updatePassword failed: $e');
+      rethrow;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// Updates the user's PIN hash after verifying the current password.
+  Future<void> updatePin({required String currentPassword, required String newPin}) async {
+    _isLoading = true;
+    notifyListeners();
+    try {
+      await verifyCurrentPassword(password: currentPassword);
+      await setPin(pin: newPin);
+    } catch (e) {
+      debugPrint('AuthService.updatePin failed: $e');
+      rethrow;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
   Future<AppUser> _loadOrCreateProfile(User supaUser, {required String? displayNameHint}) async {
     final now = DateTime.now().toUtc();
     final email = (supaUser.email ?? '').trim();
-    final displayName = (displayNameHint?.trim().isNotEmpty ?? false) ? displayNameHint!.trim() : 'Customer';
+    final metaDisplayName = (supaUser.userMetadata?['display_name'] ?? '').toString().trim();
+    final displayName = (displayNameHint?.trim().isNotEmpty ?? false)
+        ? displayNameHint!.trim()
+        : (metaDisplayName.isNotEmpty ? metaDisplayName : 'Customer');
 
-    // Upsert profile row to ensure it exists.
+    // IMPORTANT:
+    // Some schemas enforce NOT NULL constraints on trade fields (e.g. company_name).
+    // In that case, doing a "minimal" upsert can fail with 23502 (not-null violation)
+    // if the profile row doesn't exist yet.
+    //
+    // To avoid breaking profile loading (and to ensure we can still read existing
+    // trade rows with company_name/phone_number), we:
+    // 1) Try to SELECT the profile first
+    // 2) Only attempt an upsert if the row is missing
+    // 3) If upsert fails, we still return an auth-backed profile
+
+    // 1) Prefer reading existing profile row.
+    try {
+      final existingRow = await SupabaseService.selectSingle('users', filters: {'id': supaUser.id});
+      if (existingRow != null) {
+        return AppUser(
+          id: existingRow['id'].toString(),
+          email: (existingRow['email'] ?? email).toString(),
+          displayName: (existingRow['display_name'] ?? displayName).toString(),
+          companyName: existingRow['company_name']?.toString(),
+          phoneNumber: existingRow['phone_number']?.toString(),
+          xeroAccountId: existingRow['xero_account_id']?.toString(),
+          createdAt: DateTime.tryParse(existingRow['created_at']?.toString() ?? '') ?? now,
+          updatedAt: DateTime.tryParse(existingRow['updated_at']?.toString() ?? '') ?? now,
+        );
+      }
+    } on PostgrestException catch (e) {
+      debugPrint('AuthService: profile select blocked by RLS: ${e.message} (code: ${e.code})');
+      // Fall through to auth-backed profile.
+    } catch (e) {
+      debugPrint('AuthService: profile select failed: $e');
+      // Fall through to upsert attempt.
+    }
+
+    // 2) Upsert profile row to ensure it exists.
     // NOTE: If your public.users table has RLS enabled but no INSERT/UPDATE policy,
     // Supabase will throw a PostgrestException (code 42501). We must NOT crash
     // the app for that; we can still treat the Supabase auth user as signed in.
@@ -929,7 +1042,7 @@ class AuthService extends ChangeNotifier {
         'updated_at': now.toIso8601String(),
       });
     } on PostgrestException catch (e) {
-      debugPrint('AuthService: profile upsert blocked by RLS: ${e.message} (code: ${e.code})');
+      debugPrint('AuthService: profile upsert blocked/failed: ${e.message} (code: ${e.code})');
       return AppUser(
         id: supaUser.id,
         email: email,
@@ -954,6 +1067,7 @@ class AuthService extends ChangeNotifier {
       );
     }
 
+    // 3) After upsert, fetch the row so we get trade fields.
     try {
       final row = await SupabaseService.selectSingle('users', filters: {'id': supaUser.id});
       if (row == null) {
@@ -971,6 +1085,9 @@ class AuthService extends ChangeNotifier {
       );
     } on PostgrestException catch (e) {
       debugPrint('AuthService: profile select blocked by RLS: ${e.message} (code: ${e.code})');
+      return AppUser(id: supaUser.id, email: email, displayName: displayName, companyName: null, phoneNumber: null, xeroAccountId: null, createdAt: now, updatedAt: now);
+    } catch (e) {
+      debugPrint('AuthService: profile select failed after upsert: $e');
       return AppUser(id: supaUser.id, email: email, displayName: displayName, companyName: null, phoneNumber: null, xeroAccountId: null, createdAt: now, updatedAt: now);
     }
   }
