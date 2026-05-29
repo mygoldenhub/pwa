@@ -90,58 +90,55 @@ class _WelcomePageState extends State<WelcomePage> {
             ),
           ),
           SafeArea(
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 560),
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    AppSpacing.lg,
-                    isCompactHeight ? AppSpacing.md : AppSpacing.lg,
-                    AppSpacing.lg,
-                    isCompactHeight ? AppSpacing.lg : AppSpacing.xl,
-                  ),
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      // Keep the welcome screen to a single viewport (no scrolling).
-                      return Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          SizedBox(height: isCompactHeight ? 0 : AppSpacing.sm),
-                          _WelcomeBrandHeader(compact: isCompactHeight),
-                          SizedBox(
-                              height: isCompactHeight
-                                  ? AppSpacing.md
-                                  : AppSpacing.lg),
-                          TweenAnimationBuilder<double>(
-                            tween: Tween(begin: 0.0, end: 1.0),
-                            duration: const Duration(milliseconds: 520),
-                            curve: Curves.easeOutCubic,
-                            builder: (context, t, child) => Transform.translate(
-                              offset: Offset(0, 14 * (1 - t)),
-                              child: Opacity(opacity: t, child: child),
-                            ),
-                            child: _EntryGateCard(
-                              busy: isBusy,
-                              onExisting: isBusy
-                                  ? null
-                                  : () => context.go(AppRoutes.login),
-                              onNew: isBusy
-                                  ? null
-                                  : () => context.go(AppRoutes.register),
-                              compact: isCompactHeight,
-                            ),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                // Mobile devices often have shorter viewports (address bar / keyboard / safe areas).
+                // Allow scrolling when needed, while still centering content on taller screens.
+                return SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 560),
+                      child: Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          AppSpacing.lg,
+                          isCompactHeight ? AppSpacing.md : AppSpacing.lg,
+                          AppSpacing.lg,
+                          isCompactHeight ? AppSpacing.lg : AppSpacing.xl,
+                        ),
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              SizedBox(height: isCompactHeight ? 0 : AppSpacing.sm),
+                              _WelcomeBrandHeader(compact: isCompactHeight),
+                              SizedBox(height: isCompactHeight ? AppSpacing.md : AppSpacing.lg),
+                              TweenAnimationBuilder<double>(
+                                tween: Tween(begin: 0.0, end: 1.0),
+                                duration: const Duration(milliseconds: 520),
+                                curve: Curves.easeOutCubic,
+                                builder: (context, t, child) => Transform.translate(
+                                  offset: Offset(0, 14 * (1 - t)),
+                                  child: Opacity(opacity: t, child: child),
+                                ),
+                                child: _EntryGateCard(
+                                  busy: isBusy,
+                                  onExisting: isBusy ? null : () => context.go(AppRoutes.login),
+                                  onNew: isBusy ? null : () => context.go(AppRoutes.register),
+                                  compact: isCompactHeight,
+                                ),
+                              ),
+                              SizedBox(height: isCompactHeight ? AppSpacing.sm : AppSpacing.md),
+                              _WelcomeDisclaimer(compact: isCompactHeight),
+                            ],
                           ),
-                          SizedBox(
-                              height: isCompactHeight
-                                  ? AppSpacing.sm
-                                  : AppSpacing.md),
-                          _WelcomeDisclaimer(compact: isCompactHeight),
-                        ],
-                      );
-                    },
+                        ),
+                      ),
+                    ),
                   ),
-                ),
-              ),
+                );
+              },
             ),
           ),
         ],
@@ -351,14 +348,74 @@ class _GateOptionTileState extends State<_GateOptionTile> {
   bool _hovered = false;
   bool _pressed = false;
 
+  static const int _labelMaxLines = 3;
+
+  double _labelHeight(BuildContext context) {
+    final style = Theme.of(context).textTheme.titleMedium?.copyWith(
+          color: Colors.white,
+          fontWeight: FontWeight.w700,
+          height: 1.18,
+        );
+    final fontSize = style?.fontSize ?? 16;
+    final heightFactor = style?.height ?? 1.18;
+    // Reserve enough vertical space for the *largest* label (title/subtitle)
+    // so the tile size stays stable when switching on hover.
+    return fontSize * heightFactor * _labelMaxLines;
+  }
+
+  Widget _buildAnimatedLabel(BuildContext context, {required bool active}) {
+    final text = active ? widget.subtitle : widget.title;
+    final style = Theme.of(context).textTheme.titleMedium?.copyWith(
+          color: Colors.white,
+          fontWeight: FontWeight.w700,
+          height: 1.18,
+        );
+
+    return SizedBox(
+      height: _labelHeight(context),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 220),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          transitionBuilder: (child, animation) {
+            final offsetTween = Tween<Offset>(
+              begin: Offset(0, active ? 0.12 : -0.10),
+              end: Offset.zero,
+            ).chain(CurveTween(curve: Curves.easeOutCubic));
+            return FadeTransition(
+              opacity: animation,
+              child: SlideTransition(position: animation.drive(offsetTween), child: child),
+            );
+          },
+          child: Text(
+            text,
+            key: ValueKey<String>(text),
+            style: style,
+            // IMPORTANT: Don't ellipsize the primary button labels.
+            // Allow wrapping so the full text is visible on smaller screens.
+            maxLines: _labelMaxLines,
+            overflow: TextOverflow.clip,
+            softWrap: true,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final enabled = widget.onTap != null;
     final active = enabled && (_hovered || _pressed);
 
-    final bg = active ? cs.primary.withValues(alpha: 0.22) : Colors.white.withValues(alpha: 0.10);
-    final border = active ? cs.primary.withValues(alpha: 0.62) : Colors.white.withValues(alpha: 0.18);
+    final bg = active
+        ? cs.primary.withValues(alpha: 0.22)
+        : Colors.white.withValues(alpha: 0.10);
+    final border = active
+        ? cs.primary.withValues(alpha: 0.62)
+        : Colors.white.withValues(alpha: 0.18);
 
     return Semantics(
       button: true,
@@ -401,26 +458,7 @@ class _GateOptionTileState extends State<_GateOptionTile> {
                 ),
                 const SizedBox(width: AppSpacing.md),
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        widget.title,
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w700,
-                            ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        widget.subtitle,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: Colors.white.withValues(alpha: 0.90),
-                              height: 1.35,
-                            ),
-                      ),
-                    ],
-                  ),
+                  child: _buildAnimatedLabel(context, active: active),
                 ),
                 const SizedBox(width: AppSpacing.sm),
                 Icon(widget.trailingIcon, color: Colors.white.withValues(alpha: enabled ? 0.92 : 0.55)),

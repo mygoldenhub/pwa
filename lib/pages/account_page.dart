@@ -276,7 +276,7 @@ class _ProfileCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'phoneNumber',
+                  'Phone Number',
                   style: TextStyle(
                     fontSize: 20,
                     color: Colors.grey.shade600,
