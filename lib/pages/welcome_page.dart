@@ -92,47 +92,50 @@ class _WelcomePageState extends State<WelcomePage> {
           SafeArea(
             child: LayoutBuilder(
               builder: (context, constraints) {
-                // Mobile devices often have shorter viewports (address bar / keyboard / safe areas).
-                // Allow scrolling when needed, while still centering content on taller screens.
-                return SingleChildScrollView(
-                  physics: const BouncingScrollPhysics(),
-                  child: Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 560),
-                      child: Padding(
-                        padding: EdgeInsets.fromLTRB(
-                          AppSpacing.lg,
-                          isCompactHeight ? AppSpacing.md : AppSpacing.lg,
-                          AppSpacing.lg,
-                          isCompactHeight ? AppSpacing.lg : AppSpacing.xl,
-                        ),
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              SizedBox(height: isCompactHeight ? 0 : AppSpacing.sm),
-                              _WelcomeBrandHeader(compact: isCompactHeight),
-                              SizedBox(height: isCompactHeight ? AppSpacing.md : AppSpacing.lg),
-                              TweenAnimationBuilder<double>(
-                                tween: Tween(begin: 0.0, end: 1.0),
-                                duration: const Duration(milliseconds: 520),
-                                curve: Curves.easeOutCubic,
-                                builder: (context, t, child) => Transform.translate(
-                                  offset: Offset(0, 14 * (1 - t)),
-                                  child: Opacity(opacity: t, child: child),
-                                ),
-                                child: _EntryGateCard(
-                                  busy: isBusy,
-                                  onExisting: isBusy ? null : () => context.go(AppRoutes.login),
-                                  onNew: isBusy ? null : () => context.go(AppRoutes.register),
-                                  compact: isCompactHeight,
-                                ),
+                // Mobile: keep everything visible without requiring scroll.
+                // We adapt by tightening spacing and (when needed) scaling the whole content down.
+                final topPad = isCompactHeight ? AppSpacing.md : AppSpacing.lg;
+                final bottomPad = isCompactHeight ? AppSpacing.lg : AppSpacing.xl;
+                final availableHeight = (constraints.maxHeight - topPad - bottomPad).clamp(1.0, 99999.0);
+
+                // Rough "ideal" height of this screen at 1.0 scale.
+                // If the viewport is shorter, we scale down slightly rather than forcing scroll.
+                const idealHeight = 700.0;
+                final scale = (availableHeight / idealHeight).clamp(0.84, 1.0);
+
+                return Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 560),
+                    child: Padding(
+                      padding: EdgeInsets.fromLTRB(AppSpacing.lg, topPad, AppSpacing.lg, bottomPad),
+                      child: Transform.scale(
+                        scale: scale,
+                        alignment: Alignment.topCenter,
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(height: isCompactHeight ? 0 : AppSpacing.sm),
+                            _WelcomeBrandHeader(compact: isCompactHeight),
+                            SizedBox(height: isCompactHeight ? AppSpacing.md : AppSpacing.lg),
+                            TweenAnimationBuilder<double>(
+                              tween: Tween(begin: 0.0, end: 1.0),
+                              duration: const Duration(milliseconds: 520),
+                              curve: Curves.easeOutCubic,
+                              builder: (context, t, child) => Transform.translate(
+                                offset: Offset(0, 14 * (1 - t)),
+                                child: Opacity(opacity: t, child: child),
                               ),
-                              SizedBox(height: isCompactHeight ? AppSpacing.sm : AppSpacing.md),
-                              _WelcomeDisclaimer(compact: isCompactHeight),
-                            ],
-                          ),
+                              child: _EntryGateCard(
+                                busy: isBusy,
+                                onExisting: isBusy ? null : () => context.go(AppRoutes.login),
+                                onNew: isBusy ? null : () => context.go(AppRoutes.register),
+                                compact: isCompactHeight,
+                              ),
+                            ),
+                            SizedBox(height: isCompactHeight ? AppSpacing.sm : AppSpacing.md),
+                            _WelcomeDisclaimer(compact: isCompactHeight),
+                          ],
                         ),
                       ),
                     ),
