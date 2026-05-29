@@ -114,7 +114,7 @@ class _ProductsPageState extends State<ProductsPage> {
             title: 'Cart',
             actions: [
               _HeaderActionButton(
-                label: 'Add product',
+                label: 'Scan',
                 icon: Icons.add,
                 onTap: _openNewProduct,
               ),
@@ -133,7 +133,7 @@ class _ProductsPageState extends State<ProductsPage> {
                     child: filtered.isEmpty
                         ? _EmptyState(
                             title: 'Your cart is empty',
-                            subtitle: 'Scan or add an item to get started.',
+                             subtitle: 'Scan or add an item in the search bar above to get started.',
                             onPrimaryAction: _openNewProduct,
                           )
                         : ListView.separated(
@@ -355,7 +355,7 @@ class _EmptyState extends StatelessWidget {
               FilledButton.icon(
                 onPressed: onPrimaryAction,
                 icon: Icon(Icons.add, color: cs.onPrimary),
-                label: Text('Add product', style: TextStyle(color: cs.onPrimary)),
+                label: Text('Scan', style: TextStyle(color: cs.onPrimary)),
               ),
             ],
           ),
