@@ -367,7 +367,6 @@ class _GateOptionTileState extends State<_GateOptionTile> {
   }
 
   Widget _buildAnimatedLabel(BuildContext context, {required bool active}) {
-    final text = active ? widget.subtitle : widget.title;
     final style = Theme.of(context).textTheme.titleMedium?.copyWith(
           color: Colors.white,
           fontWeight: FontWeight.w700,
@@ -378,29 +377,32 @@ class _GateOptionTileState extends State<_GateOptionTile> {
       height: _labelHeight(context),
       child: Align(
         alignment: Alignment.centerLeft,
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 220),
-          switchInCurve: Curves.easeOutCubic,
-          switchOutCurve: Curves.easeInCubic,
-          transitionBuilder: (child, animation) {
-            final offsetTween = Tween<Offset>(
-              begin: Offset(0, active ? 0.12 : -0.10),
-              end: Offset.zero,
-            ).chain(CurveTween(curve: Curves.easeOutCubic));
-            return FadeTransition(
-              opacity: animation,
-              child: SlideTransition(position: animation.drive(offsetTween), child: child),
-            );
-          },
-          child: Text(
-            text,
-            key: ValueKey<String>(text),
-            style: style,
-            // IMPORTANT: Don't ellipsize the primary button labels.
-            // Allow wrapping so the full text is visible on smaller screens.
-            maxLines: _labelMaxLines,
-            overflow: TextOverflow.clip,
-            softWrap: true,
+        // Web-friendly: keep both labels in the tree and animate opacity/slide.
+        // This avoids AnimatedSwitcher doing widget replacement/layout work that
+        // can feel janky on hover in browsers.
+        child: RepaintBoundary(
+          child: Stack(
+            alignment: Alignment.centerLeft,
+            children: [
+              _HoverSwapText(
+                visible: !active,
+                text: widget.title,
+                style: style,
+                maxLines: _labelMaxLines,
+                // Title slides up slightly when becoming hidden.
+                visibleOffset: Offset.zero,
+                hiddenOffset: const Offset(0, -0.10),
+              ),
+              _HoverSwapText(
+                visible: active,
+                text: widget.subtitle,
+                style: style,
+                maxLines: _labelMaxLines,
+                // Subtitle slides up slightly when becoming visible.
+                visibleOffset: Offset.zero,
+                hiddenOffset: const Offset(0, 0.12),
+              ),
+            ],
           ),
         ),
       ),
@@ -437,8 +439,8 @@ class _GateOptionTileState extends State<_GateOptionTile> {
           onTapUp: enabled ? (_) => setState(() => _pressed = false) : null,
           onTapCancel: enabled ? () => setState(() => _pressed = false) : null,
           child: AnimatedContainer(
-            duration: const Duration(milliseconds: 160),
-            curve: Curves.easeOut,
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
             padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.md),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(AppRadius.lg),
@@ -448,8 +450,8 @@ class _GateOptionTileState extends State<_GateOptionTile> {
             child: Row(
               children: [
                 AnimatedContainer(
-                  duration: const Duration(milliseconds: 160),
-                  curve: Curves.easeOut,
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
                   width: 44,
                   height: 44,
                   decoration: BoxDecoration(
@@ -457,7 +459,12 @@ class _GateOptionTileState extends State<_GateOptionTile> {
                     color: active ? cs.primary.withValues(alpha: 0.18) : Colors.white.withValues(alpha: 0.10),
                     border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
                   ),
-                  child: Icon(widget.icon, color: Colors.white),
+                  child: AnimatedScale(
+                    duration: const Duration(milliseconds: 220),
+                    curve: Curves.easeOutCubic,
+                    scale: active ? 1.02 : 1.0,
+                    child: Icon(widget.icon, color: Colors.white),
+                  ),
                 ),
                 const SizedBox(width: AppSpacing.md),
                 Expanded(
@@ -467,6 +474,48 @@ class _GateOptionTileState extends State<_GateOptionTile> {
                 Icon(widget.trailingIcon, color: Colors.white.withValues(alpha: enabled ? 0.92 : 0.55)),
               ],
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _HoverSwapText extends StatelessWidget {
+  final bool visible;
+  final String text;
+  final TextStyle? style;
+  final int maxLines;
+  final Offset visibleOffset;
+  final Offset hiddenOffset;
+
+  const _HoverSwapText({
+    required this.visible,
+    required this.text,
+    required this.style,
+    required this.maxLines,
+    required this.visibleOffset,
+    required this.hiddenOffset,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      ignoring: true,
+      child: AnimatedOpacity(
+        opacity: visible ? 1 : 0,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        child: AnimatedSlide(
+          offset: visible ? visibleOffset : hiddenOffset,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          child: Text(
+            text,
+            style: style,
+            maxLines: maxLines,
+            overflow: TextOverflow.clip,
+            softWrap: true,
           ),
         ),
       ),
