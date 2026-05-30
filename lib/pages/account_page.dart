@@ -250,6 +250,7 @@ class _ProfileCard extends StatelessWidget {
                   'Company name',
                   style: TextStyle(
                     fontSize: 20,
+                    fontWeight: FontWeight.bold,
                     color: Colors.grey.shade600,
                   ),
                 ),
@@ -258,7 +259,7 @@ class _ProfileCard extends StatelessWidget {
                   companyName.isEmpty ? '—' : companyName,
                   style: const TextStyle(
                     fontSize: 17,
-                    color: Colors.black87,
+                    color: Colors.black,
                   ),
                 ),
               ],
@@ -279,6 +280,7 @@ class _ProfileCard extends StatelessWidget {
                   'Phone Number',
                   style: TextStyle(
                     fontSize: 20,
+                    fontWeight: FontWeight.bold,
                     color: Colors.grey.shade600,
                   ),
                 ),
@@ -287,7 +289,7 @@ class _ProfileCard extends StatelessWidget {
                   phoneNumber.isEmpty ? '—' : phoneNumber,
                   style: const TextStyle(
                     fontSize: 17,
-                    color: Colors.black87,
+                    color: Colors.black,
                   ),
                 ),
               ],

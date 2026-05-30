@@ -183,9 +183,8 @@ class _LoginMethodPicker extends StatelessWidget {
         Expanded(
           child: _ModeTile(
             selected: method == _LoginMethod.pin,
-            icon: Icons.pin_outlined,
             title: 'PIN',
-            subtitle: 'Quick unlock',
+            subtitle: 'Quick unlock with your\n4-digit PIN.',
             onTap: onChanged == null ? null : () => onChanged!(_LoginMethod.pin),
           ),
         ),
@@ -193,9 +192,8 @@ class _LoginMethodPicker extends StatelessWidget {
         Expanded(
           child: _ModeTile(
             selected: method == _LoginMethod.password,
-            icon: Icons.password,
             title: 'Password',
-            subtitle: 'Full sign-in',
+            subtitle: 'Full sign-in with your\npassword.',
             onTap: onChanged == null ? null : () => onChanged!(_LoginMethod.password),
           ),
         ),
@@ -204,67 +202,108 @@ class _LoginMethodPicker extends StatelessWidget {
   }
 }
 
-class _ModeTile extends StatelessWidget {
+class _ModeTile extends StatefulWidget {
   final bool selected;
-  final IconData icon;
   final String title;
   final String subtitle;
   final VoidCallback? onTap;
 
   const _ModeTile({
     required this.selected,
-    required this.icon,
     required this.title,
     required this.subtitle,
     required this.onTap,
   });
 
   @override
+  State<_ModeTile> createState() => _ModeTileState();
+}
+
+class _ModeTileState extends State<_ModeTile> {
+  bool _hovered = false;
+
+  @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
-    final bg = selected ? cs.primaryContainer : cs.surfaceContainerHighest;
-    final fg = selected ? cs.onPrimaryContainer : cs.onSurface;
+
+    final bool selected = widget.selected;
+    final bool enabled = widget.onTap != null;
+    final bool hovered = enabled && _hovered;
+
+    final bg = selected ? cs.primaryContainer : cs.surface;
+    final borderColor = selected ? cs.primary : cs.outlineVariant.withValues(alpha: 0.45);
+    final borderWidth = selected ? 2.0 : 1.0;
+    final titleStyle = textTheme.titleMedium?.copyWith(
+      color: selected ? cs.onPrimaryContainer : cs.onSurface,
+      fontWeight: FontWeight.w700,
+      letterSpacing: 0.2,
+    );
+    final subtitleStyle = textTheme.bodySmall?.copyWith(
+      color: (selected ? cs.onPrimaryContainer : cs.onSurfaceVariant).withValues(alpha: 0.9),
+      height: 1.35,
+    );
+
+    final shadowColor = cs.shadow.withValues(alpha: selected ? 0.14 : 0.10);
+    final boxShadow = <BoxShadow>[
+      BoxShadow(
+        color: shadowColor,
+        blurRadius: selected ? 18 : 14,
+        offset: Offset(0, selected ? 10 : 8),
+      ),
+    ];
 
     return Semantics(
       button: true,
       selected: selected,
-      label: '$title mode',
-      child: GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOut,
-          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.md),
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: BorderRadius.circular(AppRadius.lg),
-            border: Border.all(color: selected ? cs.primary : cs.outlineVariant),
-          ),
-          child: Row(
-            children: [
-              Icon(icon, color: fg),
-              const SizedBox(width: AppSpacing.sm),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title, style: textTheme.titleSmall?.copyWith(color: fg, fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 2),
-                    Text(subtitle, style: textTheme.bodySmall?.copyWith(color: fg.withValues(alpha: 0.8))),
-                  ],
-                ),
+      label: '${widget.title} mode',
+      child: MouseRegion(
+        cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          behavior: HitTestBehavior.opaque,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            height: 108,
+            padding: const EdgeInsets.all(AppSpacing.md),
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(AppRadius.xl),
+              border: Border.all(color: borderColor, width: borderWidth),
+              boxShadow: enabled ? boxShadow : null,
+            ),
+            child: AnimatedSlide(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic,
+              offset: hovered ? const Offset(0, -0.015) : Offset.zero,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(child: Text(widget.title, style: titleStyle)),
+                      const SizedBox(width: AppSpacing.sm),
+                      AnimatedOpacity(
+                        duration: const Duration(milliseconds: 180),
+                        curve: Curves.easeOutCubic,
+                        opacity: selected ? 1 : 0,
+                        child: Icon(Icons.check_circle, color: cs.primary, size: 18),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(widget.subtitle, style: subtitleStyle, maxLines: 2, overflow: TextOverflow.clip),
+                ],
               ),
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 180),
-                child: selected
-                    ? Icon(Icons.check_circle, key: const ValueKey('on'), color: cs.primary)
-                    : Icon(Icons.circle_outlined, key: const ValueKey('off'), color: cs.onSurfaceVariant),
-              ),
-            ],
+            ),
           ),
         ),
       ),
     );
   }
 }
+

@@ -14,6 +14,111 @@ class ProductsPage extends StatefulWidget {
   State<ProductsPage> createState() => _ProductsPageState();
 }
 
+enum _ScanChoice { barcode, productName }
+
+class _ScanChoiceSheet extends StatelessWidget {
+  const _ScanChoiceSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: AppSpacing.paddingLg,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Add item', style: Theme.of(context).textTheme.titleLarge?.semiBold),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            'Choose how you want to add an item.',
+            style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          _ScanChoiceTile(
+            icon: Icons.qr_code_scanner,
+            title: 'Barcode mode',
+            subtitle: 'Use your camera to scan a barcode.',
+            onTap: () => context.pop(_ScanChoice.barcode),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          _ScanChoiceTile(
+            icon: Icons.text_fields,
+            title: 'Product name mode',
+            subtitle: 'Enter the item name manually.',
+            onTap: () => context.pop(_ScanChoice.productName),
+          ),
+          const SizedBox(height: AppSpacing.md),
+        ],
+      ),
+    );
+  }
+}
+
+class _ScanChoiceTile extends StatefulWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  const _ScanChoiceTile({required this.icon, required this.title, required this.subtitle, required this.onTap});
+
+  @override
+  State<_ScanChoiceTile> createState() => _ScanChoiceTileState();
+}
+
+class _ScanChoiceTileState extends State<_ScanChoiceTile> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          curve: Curves.easeOutCubic,
+          padding: AppSpacing.paddingLg,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AppRadius.xl),
+            color: _hovered ? cs.primaryContainer.withValues(alpha: 0.55) : cs.surface,
+            border: Border.all(color: _hovered ? cs.primary.withValues(alpha: 0.35) : cs.outline.withValues(alpha: 0.12)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: cs.primaryContainer,
+                  borderRadius: BorderRadius.circular(AppRadius.lg),
+                ),
+                child: Icon(widget.icon, color: cs.onPrimaryContainer),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(widget.title, style: Theme.of(context).textTheme.titleMedium?.semiBold),
+                    const SizedBox(height: 2),
+                    Text(widget.subtitle, style: Theme.of(context).textTheme.bodySmall?.withColor(cs.onSurfaceVariant)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Icon(Icons.chevron_right, color: cs.onSurfaceVariant),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ProductsPageState extends State<ProductsPage> {
   String _query = '';
   bool _handledRouteExtra = false;
@@ -78,7 +183,7 @@ class _ProductsPageState extends State<ProductsPage> {
     }
   }
 
-  void _openNewProduct() async {
+  Future<void> _openNewProductViaBarcode() async {
     final barcode = await context.push<String?>(AppRoutes.barcodeScan);
     if (!mounted) return;
 
@@ -88,6 +193,32 @@ class _ProductsPageState extends State<ProductsPage> {
     );
     if (!mounted) return;
     if (saved == true) _showSavedNotification();
+  }
+
+  Future<void> _openNewProductViaName() async {
+    final suggestedName = _query.trim();
+    final saved = await context.push<bool>(
+      AppRoutes.productNew,
+      extra: suggestedName.isEmpty ? null : {'name': suggestedName},
+    );
+    if (!mounted) return;
+    if (saved == true) _showSavedNotification();
+  }
+
+  Future<void> _openScanChooser() async {
+    final choice = await showModalBottomSheet<_ScanChoice>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => const _ScanChoiceSheet(),
+    );
+
+    if (!mounted || choice == null) return;
+    switch (choice) {
+      case _ScanChoice.barcode:
+        await _openNewProductViaBarcode();
+      case _ScanChoice.productName:
+        await _openNewProductViaName();
+    }
   }
 
   void _openEditProduct(String id) async {
@@ -116,7 +247,7 @@ class _ProductsPageState extends State<ProductsPage> {
               _HeaderActionButton(
                 label: 'Scan',
                 icon: Icons.add,
-                onTap: _openNewProduct,
+                onTap: _openScanChooser,
               ),
             ],
           ),
@@ -133,8 +264,8 @@ class _ProductsPageState extends State<ProductsPage> {
                     child: filtered.isEmpty
                         ? _EmptyState(
                             title: 'Your cart is empty',
-                             subtitle: 'Scan or add an item in the search bar above to get started.',
-                            onPrimaryAction: _openNewProduct,
+                              subtitle: 'Scan or add an item in the search bar above to get started.',
+                             onPrimaryAction: _openScanChooser,
                           )
                         : ListView.separated(
                             itemCount: filtered.length,

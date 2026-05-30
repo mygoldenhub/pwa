@@ -12,8 +12,9 @@ class ProductFormPage extends StatefulWidget {
   final AppState appState;
   final String? productId;
   final String? initialBarcode;
+  final String? initialName;
 
-  const ProductFormPage({super.key, required this.appState, required this.productId, this.initialBarcode});
+  const ProductFormPage({super.key, required this.appState, required this.productId, this.initialBarcode, this.initialName});
 
   @override
   State<ProductFormPage> createState() => _ProductFormPageState();
@@ -41,6 +42,11 @@ class _ProductFormPageState extends State<ProductFormPage> {
       final initialBarcode = widget.initialBarcode?.trim();
       if (initialBarcode != null && initialBarcode.isNotEmpty) {
         _barcodeController.text = initialBarcode;
+      }
+
+      final initialName = widget.initialName?.trim();
+      if (initialName != null && initialName.isNotEmpty) {
+        _nameController.text = initialName;
       }
     }
   }
@@ -137,6 +143,7 @@ class _ProductFormPageState extends State<ProductFormPage> {
                       children: [
                         TextField(
                           controller: _nameController,
+                          autofocus: !isEdit,
                           decoration: const InputDecoration(
                             labelText: 'Product name',
                             prefixIcon: Icon(Icons.inventory_2_outlined),

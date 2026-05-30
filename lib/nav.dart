@@ -101,7 +101,12 @@ class AppRouter {
                       pageBuilder: (context, state) {
                         final extra = (state.extra is Map) ? (state.extra as Map) : const <String, dynamic>{};
                         return MaterialPage(
-                          child: ProductFormPage(appState: appState, productId: null, initialBarcode: extra['barcode']?.toString()),
+                          child: ProductFormPage(
+                            appState: appState,
+                            productId: null,
+                            initialBarcode: extra['barcode']?.toString(),
+                            initialName: extra['name']?.toString(),
+                          ),
                         );
                       },
                     ),
