@@ -80,23 +80,167 @@ export type Database = {
         }
         Relationships: []
       }
-      xero_oauth_tokens: {
+      xero_contacts: {
         Row: {
+          email: string | null
+          id: string
+          is_customer: boolean | null
+          is_supplier: boolean | null
+          name: string | null
+          phone: string | null
+          raw: Json | null
+          synced_at: string | null
+          tenant_id: string
+          xero_contact_id: string
+        }
+        Insert: {
+          email?: string | null
+          id?: string
+          is_customer?: boolean | null
+          is_supplier?: boolean | null
+          name?: string | null
+          phone?: string | null
+          raw?: Json | null
+          synced_at?: string | null
+          tenant_id: string
+          xero_contact_id: string
+        }
+        Update: {
+          email?: string | null
+          id?: string
+          is_customer?: boolean | null
+          is_supplier?: boolean | null
+          name?: string | null
+          phone?: string | null
+          raw?: Json | null
+          synced_at?: string | null
+          tenant_id?: string
+          xero_contact_id?: string
+        }
+        Relationships: []
+      }
+      xero_invoices: {
+        Row: {
+          amount_due: number | null
+          amount_paid: number | null
+          contact_id: string | null
+          currency: string | null
+          due_date: string | null
+          id: string
+          invoice_number: string | null
+          issue_date: string | null
+          raw: Json | null
+          status: string | null
+          synced_at: string | null
+          tenant_id: string
+          total: number | null
+          type: string | null
+          xero_invoice_id: string
+        }
+        Insert: {
+          amount_due?: number | null
+          amount_paid?: number | null
+          contact_id?: string | null
+          currency?: string | null
+          due_date?: string | null
+          id?: string
+          invoice_number?: string | null
+          issue_date?: string | null
+          raw?: Json | null
+          status?: string | null
+          synced_at?: string | null
+          tenant_id: string
+          total?: number | null
+          type?: string | null
+          xero_invoice_id: string
+        }
+        Update: {
+          amount_due?: number | null
+          amount_paid?: number | null
+          contact_id?: string | null
+          currency?: string | null
+          due_date?: string | null
+          id?: string
+          invoice_number?: string | null
+          issue_date?: string | null
+          raw?: Json | null
+          status?: string | null
+          synced_at?: string | null
+          tenant_id?: string
+          total?: number | null
+          type?: string | null
+          xero_invoice_id?: string
+        }
+        Relationships: []
+      }
+      xero_products: {
+        Row: {
+          code: string | null
           created_at: string
+          description: string | null
+          name: string | null
+          raw: Json | null
+          sale_price_cents: number | null
+          sales_account: string | null
+          tax_rate: string | null
+          updated_at: string
+          xero_item_id: string
+        }
+        Insert: {
+          code?: string | null
+          created_at?: string
+          description?: string | null
+          name?: string | null
+          raw?: Json | null
+          sale_price_cents?: number | null
+          sales_account?: string | null
+          tax_rate?: string | null
+          updated_at?: string
+          xero_item_id: string
+        }
+        Update: {
+          code?: string | null
+          created_at?: string
+          description?: string | null
+          name?: string | null
+          raw?: Json | null
+          sale_price_cents?: number | null
+          sales_account?: string | null
+          tax_rate?: string | null
+          updated_at?: string
+          xero_item_id?: string
+        }
+        Relationships: []
+      }
+      xero_tokens: {
+        Row: {
+          access_token: string
+          created_at: string | null
+          expires_at: string
           id: string
           refresh_token: string
+          tenant_id: string
+          tenant_name: string | null
           updated_at: string
         }
         Insert: {
-          created_at?: string
+          access_token: string
+          created_at?: string | null
+          expires_at: string
           id?: string
           refresh_token: string
+          tenant_id: string
+          tenant_name?: string | null
           updated_at?: string
         }
         Update: {
-          created_at?: string
+          access_token?: string
+          created_at?: string | null
+          expires_at?: string
           id?: string
           refresh_token?: string
+          tenant_id?: string
+          tenant_name?: string | null
           updated_at?: string
         }
         Relationships: []

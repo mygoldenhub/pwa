@@ -20,14 +20,27 @@ create table if not exists public.users (
 
 create unique index if not exists idx_users_email_unique on public.users (lower(email));
 
--- Stores the rotating Xero OAuth2 refresh token used by the Edge Function.
--- This is intended to be a single-row table (id='default').
-create table if not exists public.xero_oauth_tokens (
-  id text primary key default 'default',
+-- Stores Xero OAuth2 tokens used by Edge Functions.
+--
+-- NOTE:
+-- This project currently stores ONE shared Xero connection in this table
+-- (no per-user linkage). Edge Functions always read the most recent row.
+--
+-- Required by xero_sync_products:
+-- - refresh_token (rotates)
+-- - tenant_id (optional if you set XERO_TENANT_ID secret instead)
+create table if not exists public.xero_tokens (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id text null,
+  tenant_name text null,
+  access_token text null,
   refresh_token text not null,
+  expires_at timestamptz null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+create index if not exists idx_xero_tokens_created_at on public.xero_tokens (created_at desc);
 
 -- Functions to set/verify PIN for the authenticated user.
 -- These run as SECURITY DEFINER so they can update even with strict RLS,
@@ -91,3 +104,24 @@ create table if not exists public.products (
 
 create index if not exists idx_products_updated_at on public.products (updated_at desc);
 create index if not exists idx_products_barcode on public.products (barcode);
+
+-- Xero Product & Services (Items) cache
+-- Synced hourly by the xero_sync_products edge function.
+create table if not exists public.xero_products (
+  xero_item_id text primary key,
+  code text null,
+  name text null,
+  sale_price_cents integer null,
+  sales_account text null,
+  tax_rate text null,
+  description text null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create unique index if not exists idx_xero_products_code_unique
+on public.xero_products (code)
+where code is not null;
+
+create index if not exists idx_xero_products_updated_at
+on public.xero_products (updated_at desc);

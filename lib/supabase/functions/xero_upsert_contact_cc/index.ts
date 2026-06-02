@@ -8,10 +8,10 @@
 /// Required secrets:
 /// - XERO_CLIENT_ID
 /// - XERO_CLIENT_SECRET
-/// - XERO_TENANT_ID
+/// - XERO_TENANT_ID              (optional if stored in DB; DB value will be used if unset)
 ///
 /// DB requirement:
-/// - public.xero_oauth_tokens must have a row id='default' containing refresh_token.
+/// - public.xero_tokens must contain at least one row with refresh_token (and ideally tenant_id)
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
@@ -46,6 +46,54 @@ function requireEnv(name: string): string {
   const value = Deno.env.get(name);
   if (!value) throw new Error(`Missing required env var: ${name}`);
   return value;
+}
+
+function safeStr(v: unknown): string {
+  return typeof v === "string" ? v.trim() : "";
+}
+
+async function readLatestTokenRow(
+  supabaseUrl: string,
+  serviceRole: string,
+): Promise<{ id: string; refreshToken: string; tenantIdFromDb: string | null }> {
+  const res = await fetch(
+    `${supabaseUrl}/rest/v1/xero_tokens?select=id,refresh_token,tenant_id,created_at&order=created_at.desc&limit=1`,
+    {
+      method: "GET",
+      headers: { apikey: serviceRole, authorization: `Bearer ${serviceRole}` },
+    },
+  );
+
+  if (!res.ok) throw new Error(`Failed to read xero_tokens row from Supabase: ${res.status} :: ${await res.text()}`);
+
+  const json = (await res.json()) as Array<{ id?: string; refresh_token?: string; tenant_id?: string }>;
+  const row = json?.[0];
+  const id = safeStr(row?.id);
+  const refreshToken = safeStr(row?.refresh_token);
+  if (!id || !refreshToken) throw new Error("No valid row found in public.xero_tokens for this request.");
+
+  const tenantIdFromDb = safeStr(row?.tenant_id) || null;
+  return { id, refreshToken, tenantIdFromDb };
+}
+
+async function rotateTokensInDb(
+  supabaseUrl: string,
+  serviceRole: string,
+  tokenRowId: string,
+  patch: { access_token?: string; refresh_token?: string; expires_at?: string },
+) {
+  const res = await fetch(`${supabaseUrl}/rest/v1/xero_tokens?id=eq.${encodeURIComponent(tokenRowId)}`, {
+    method: "PATCH",
+    headers: {
+      apikey: serviceRole,
+      authorization: `Bearer ${serviceRole}`,
+      "content-type": "application/json",
+      Prefer: "return=minimal",
+    },
+    body: JSON.stringify({ ...patch, updated_at: new Date().toISOString() }),
+  });
+
+  if (!res.ok) throw new Error(`Failed to update xero_tokens in Supabase: ${res.status} :: ${await res.text()}`);
 }
 
 function normalizeEmail(email: string) {
@@ -120,6 +168,8 @@ serve(async (req) => {
 
     const body = (await req.json()) as UpsertRequestBody;
 
+    // verify_jwt=false; tokens are stored globally in public.xero_tokens.
+
     const fullName = (body.fullName || body.full_name || "").trim();
     const emailRaw = (body.email || "").trim();
     const companyName = (body.companyName || body.company_name || "").trim();
@@ -132,34 +182,20 @@ serve(async (req) => {
 
     const clientId = requireEnv("XERO_CLIENT_ID");
     const clientSecret = requireEnv("XERO_CLIENT_SECRET");
-    const tenantId = requireEnv("XERO_TENANT_ID");
+    const tenantIdEnv = safeStr(Deno.env.get("XERO_TENANT_ID"));
 
     // Supabase DB connection for token storage
     const supabaseUrl = requireEnv("SUPABASE_URL");
     const serviceRole = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
 
     // 1) Read refresh token from Postgres
-    const tokenRow = await fetch(`${supabaseUrl}/rest/v1/xero_oauth_tokens?id=eq.default&select=refresh_token`, {
-      method: "GET",
-      headers: {
-        apikey: serviceRole,
-        authorization: `Bearer ${serviceRole}`,
-      },
-    });
+    const latest = await readLatestTokenRow(supabaseUrl, serviceRole);
+    const refreshToken = latest.refreshToken;
 
-    if (!tokenRow.ok) {
-      const t = await tokenRow.text();
-      throw new Error(`Failed to read refresh token from Supabase: ${tokenRow.status} :: ${t}`);
-    }
-
-    const tokenJson = (await tokenRow.json()) as Array<{ refresh_token?: string }>;
-    const refreshToken = tokenJson?.[0]?.refresh_token;
-    if (!refreshToken) {
-      return jsonResponse(500, {
-        error: "missing_refresh_token",
-        message:
-          "No refresh_token found in public.xero_oauth_tokens for id=default. Insert an initial refresh token first.",
-      });
+    // Prefer DB tenant_id; allow env override for backwards compatibility.
+    const tenantId = tenantIdEnv || latest.tenantIdFromDb;
+    if (!tenantId) {
+      throw new Error("Missing tenant_id. Set XERO_TENANT_ID secret or store tenant_id in public.xero_tokens.");
     }
 
     // 2) Refresh token -> access token (and rotate refresh token)
@@ -190,22 +226,9 @@ serve(async (req) => {
     const rotatedRefreshToken: string | undefined = tokenData?.refresh_token;
     if (!accessToken) throw new Error(`Missing access_token in refresh response: ${JSON.stringify(tokenData)}`);
 
-    if (rotatedRefreshToken && rotatedRefreshToken !== refreshToken) {
-      const upsertRes = await fetch(`${supabaseUrl}/rest/v1/xero_oauth_tokens`, {
-        method: "POST",
-        headers: {
-          apikey: serviceRole,
-          authorization: `Bearer ${serviceRole}`,
-          "content-type": "application/json",
-          Prefer: "resolution=merge-duplicates",
-        },
-        body: JSON.stringify({ id: "default", refresh_token: rotatedRefreshToken, updated_at: new Date().toISOString() }),
-      });
-      if (!upsertRes.ok) {
-        const t = await upsertRes.text();
-        throw new Error(`Failed to rotate refresh token in Supabase: ${upsertRes.status} :: ${t}`);
-      }
-    }
+    const patch: { access_token?: string; refresh_token?: string; expires_at?: string } = { access_token: accessToken };
+    if (rotatedRefreshToken && rotatedRefreshToken !== refreshToken) patch.refresh_token = rotatedRefreshToken;
+    await rotateTokensInDb(supabaseUrl, serviceRole, latest.id, patch);
 
     const xeroHeaders = {
       Authorization: `Bearer ${accessToken}`,

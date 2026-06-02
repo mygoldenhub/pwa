@@ -4,6 +4,7 @@
 
 alter table public.users enable row level security;
 alter table public.products enable row level security;
+alter table public.xero_tokens enable row level security;
 
 -- USERS
 drop policy if exists "users_select_own" on public.users;
@@ -45,3 +46,13 @@ for all
 to authenticated
 using (true)
 with check (true);
+
+-- XERO TOKENS
+-- IMPORTANT: These rows contain OAuth tokens. We intentionally do NOT allow SELECT from clients.
+-- Edge Functions use the service role key and bypass RLS.
+
+-- We do not create client-facing insert/update/delete policies for xero_tokens.
+-- Only Edge Functions (service role) should write to this table.
+drop policy if exists "xero_tokens_insert_own" on public.xero_tokens;
+drop policy if exists "xero_tokens_update_own" on public.xero_tokens;
+drop policy if exists "xero_tokens_delete_own" on public.xero_tokens;
