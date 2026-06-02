@@ -8,11 +8,12 @@ import 'package:pwa/pages/barcode_scanner_page.dart';
 import 'package:pwa/pages/invoice_page.dart';
 import 'package:pwa/pages/loading_page.dart';
 import 'package:pwa/pages/login_page.dart';
-import 'package:pwa/pages/product_form_page.dart';
 import 'package:pwa/pages/products_page.dart';
 import 'package:pwa/pages/register_page.dart';
 import 'package:pwa/pages/verify_email_code_page.dart';
 import 'package:pwa/pages/welcome_page.dart';
+import 'package:pwa/pages/xero_product_detail_page.dart';
+import 'package:pwa/pages/product_form_page.dart';
 
 /// GoRouter configuration for app navigation
 ///
@@ -97,6 +98,10 @@ class AppRouter {
                   ),
                   routes: [
                     GoRoute(
+                      path: 'scan',
+                      pageBuilder: (context, state) => const MaterialPage(child: BarcodeScannerPage()),
+                    ),
+                    GoRoute(
                       path: 'new',
                       pageBuilder: (context, state) {
                         final extra = (state.extra is Map) ? (state.extra as Map) : const <String, dynamic>{};
@@ -104,15 +109,17 @@ class AppRouter {
                           child: ProductFormPage(
                             appState: appState,
                             productId: null,
-                            initialBarcode: extra['barcode']?.toString(),
-                            initialName: extra['name']?.toString(),
+                            initialBarcode: (extra['initial_barcode'] ?? '').toString(),
+                            initialName: (extra['initial_name'] ?? '').toString(),
                           ),
                         );
                       },
                     ),
                     GoRoute(
-                      path: 'scan',
-                      pageBuilder: (context, state) => const MaterialPage(child: BarcodeScannerPage()),
+                      path: 'xero/:xeroItemId',
+                      pageBuilder: (context, state) => MaterialPage(
+                        child: XeroProductDetailPage(xeroItemId: state.pathParameters['xeroItemId'] ?? ''),
+                      ),
                     ),
                     GoRoute(
                       path: ':id/edit',
@@ -163,7 +170,8 @@ class AppRoutes {
   static const String invoice = '/app/invoice';
   static const String account = '/app/account';
 
-  static const String productNew = '/app/cart/new';
   static const String barcodeScan = '/app/cart/scan';
+  static const String productNew = '/app/cart/new';
   static String productEdit(String id) => '/app/cart/$id/edit';
+  static String xeroProduct(String xeroItemId) => '/app/cart/xero/$xeroItemId';
 }

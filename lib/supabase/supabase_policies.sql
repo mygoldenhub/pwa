@@ -5,6 +5,7 @@
 alter table public.users enable row level security;
 alter table public.products enable row level security;
 alter table public.xero_tokens enable row level security;
+alter table public.xero_products enable row level security;
 
 -- USERS
 drop policy if exists "users_select_own" on public.users;
@@ -56,3 +57,12 @@ with check (true);
 drop policy if exists "xero_tokens_insert_own" on public.xero_tokens;
 drop policy if exists "xero_tokens_update_own" on public.xero_tokens;
 drop policy if exists "xero_tokens_delete_own" on public.xero_tokens;
+
+-- XERO PRODUCTS
+-- Shared admin-managed integration: any signed-in user may read the synced catalog.
+drop policy if exists "xero_products_read" on public.xero_products;
+create policy "xero_products_read"
+on public.xero_products
+for select
+to authenticated
+using (true);

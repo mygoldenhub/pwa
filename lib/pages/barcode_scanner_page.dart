@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:pwa/components/app_header.dart';
+import 'package:pwa/nav.dart';
 import 'package:pwa/theme.dart';
 
 class BarcodeScannerPage extends StatefulWidget {
@@ -18,6 +19,17 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
   String? _lastValue;
   MobileScannerException? _lastError;
   bool _starting = true;
+
+  void _goToAddItem() {
+    if (!mounted) return;
+    _didReturn = true;
+    try {
+      _controller.stop();
+    } catch (e) {
+      debugPrint('Failed to stop scanner before manual entry: $e');
+    }
+    context.go(AppRoutes.productNew);
+  }
 
   @override
   void initState() {
@@ -136,7 +148,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
                       children: [
                         Expanded(
                           child: OutlinedButton.icon(
-                            onPressed: () => context.pop<String?>(null),
+                            onPressed: _goToAddItem,
                             style: OutlinedButton.styleFrom(
                               foregroundColor: Colors.white,
                               side: BorderSide(color: Colors.white.withValues(alpha: 0.35)),
@@ -233,7 +245,7 @@ class _ScannerErrorState extends StatelessWidget {
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
-                    onPressed: () => context.pop<String?>(null),
+                    onPressed: () => context.go(AppRoutes.productNew),
                     icon: Icon(Icons.edit, color: cs.onPrimary),
                     label: Text('Enter manually', style: TextStyle(color: cs.onPrimary)),
                   ),

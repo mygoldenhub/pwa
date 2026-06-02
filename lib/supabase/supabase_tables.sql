@@ -119,6 +119,17 @@ create table if not exists public.xero_products (
   updated_at timestamptz not null default now()
 );
 
+-- RLS note:
+-- If you have enabled Row Level Security for this table in Supabase,
+-- you MUST add a SELECT policy, otherwise authenticated clients will see 0 rows.
+-- Recommended minimal policy for a shared admin-managed integration:
+--
+-- alter table public.xero_products enable row level security;
+-- create policy "xero_products_read" on public.xero_products
+--   for select
+--   to authenticated
+--   using (true);
+
 create unique index if not exists idx_xero_products_code_unique
 on public.xero_products (code)
 where code is not null;

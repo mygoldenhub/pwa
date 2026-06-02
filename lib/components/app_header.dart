@@ -10,12 +10,14 @@ enum AppHeaderTone { light, dark }
 /// - Subtle animation when switching tabs
 class AppImpactHeader extends StatelessWidget implements PreferredSizeWidget {
   final String? title;
+  final Widget? leading;
   final List<Widget>? actions;
   final AppHeaderTone tone;
 
   const AppImpactHeader({
     super.key,
     this.title,
+    this.leading,
     this.actions,
     this.tone = AppHeaderTone.light,
   });
@@ -43,6 +45,10 @@ class AppImpactHeader extends StatelessWidget implements PreferredSizeWidget {
           decoration: BoxDecoration(border: Border(bottom: BorderSide(color: border, width: 1))),
           child: Row(
             children: [
+              if (leading != null) ...[
+                leading!,
+                const SizedBox(width: 10),
+              ],
               _HeaderTitlePill(label: label.isEmpty ? ' ' : label, tone: tone),
               const Spacer(),
               if (actions != null) ...[

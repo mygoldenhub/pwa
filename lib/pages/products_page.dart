@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/app_state.dart';
 import 'package:pwa/components/app_header.dart';
 import 'package:pwa/models/product.dart';
+import 'package:pwa/models/xero_product.dart';
 import 'package:pwa/nav.dart';
+import 'package:pwa/services/xero_product_service.dart';
 import 'package:pwa/theme.dart';
 
 class ProductsPage extends StatefulWidget {
@@ -183,26 +187,45 @@ class _ProductsPageState extends State<ProductsPage> {
     }
   }
 
-  Future<void> _openNewProductViaBarcode() async {
-    final barcode = await context.push<String?>(AppRoutes.barcodeScan);
+  Future<void> _openViaBarcode() async {
+    final barcodeOrCode = await context.push<String?>(AppRoutes.barcodeScan);
+    if (!mounted || barcodeOrCode == null || barcodeOrCode.trim().isEmpty) return;
+    final found = await XeroProductService.getByCode(barcodeOrCode.trim());
     if (!mounted) return;
 
-    final saved = await context.push<bool>(
-      AppRoutes.productNew,
-      extra: barcode == null ? null : {'barcode': barcode},
-    );
-    if (!mounted) return;
-    if (saved == true) _showSavedNotification();
+    if (found == null) {
+      final cs = Theme.of(context).colorScheme;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            showCloseIcon: true,
+            margin: const EdgeInsets.all(AppSpacing.lg),
+            content: Row(
+              children: [
+                Icon(Icons.search_off, color: cs.onInverseSurface),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(child: Text('No Xero product found for “${barcodeOrCode.trim()}”')),
+              ],
+            ),
+          ),
+        );
+      return;
+    }
+
+    context.push(AppRoutes.xeroProduct(found.xeroItemId));
   }
 
-  Future<void> _openNewProductViaName() async {
-    final suggestedName = _query.trim();
-    final saved = await context.push<bool>(
-      AppRoutes.productNew,
-      extra: suggestedName.isEmpty ? null : {'name': suggestedName},
+  Future<void> _openViaProductName() async {
+    final selected = await showModalBottomSheet<XeroProduct>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (context) => _XeroProductNamePickerSheet(initialQuery: _query.trim()),
     );
-    if (!mounted) return;
-    if (saved == true) _showSavedNotification();
+    if (!mounted || selected == null) return;
+    context.push(AppRoutes.xeroProduct(selected.xeroItemId));
   }
 
   Future<void> _openScanChooser() async {
@@ -215,9 +238,9 @@ class _ProductsPageState extends State<ProductsPage> {
     if (!mounted || choice == null) return;
     switch (choice) {
       case _ScanChoice.barcode:
-        await _openNewProductViaBarcode();
+        await _openViaBarcode();
       case _ScanChoice.productName:
-        await _openNewProductViaName();
+        await _openViaProductName();
     }
   }
 
@@ -536,6 +559,238 @@ class _ConfirmDeleteSheet extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.md),
         ],
+      ),
+    );
+  }
+}
+
+class _XeroProductNamePickerSheet extends StatefulWidget {
+  final String initialQuery;
+  const _XeroProductNamePickerSheet({required this.initialQuery});
+
+  @override
+  State<_XeroProductNamePickerSheet> createState() => _XeroProductNamePickerSheetState();
+}
+
+class _XeroProductNamePickerSheetState extends State<_XeroProductNamePickerSheet> {
+  final _controller = TextEditingController();
+  final _focusNode = FocusNode();
+
+  String _query = '';
+  bool _isLoading = false;
+  List<XeroProduct> _results = const [];
+  Timer? _debounce;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.text = widget.initialQuery;
+    _query = widget.initialQuery;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _focusNode.requestFocus();
+      _kickoffSearch();
+    });
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _controller.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  void _kickoffSearch() {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 220), () async {
+      final q = _query.trim();
+      if (!mounted) return;
+      if (q.isEmpty) {
+        setState(() {
+          _results = const [];
+          _isLoading = false;
+        });
+        return;
+      }
+
+      setState(() => _isLoading = true);
+      final rows = await XeroProductService.searchByNamePrefix(q, limit: 10);
+      if (!mounted) return;
+      setState(() {
+        _results = rows;
+        _isLoading = false;
+      });
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    return Padding(
+      padding: EdgeInsets.only(left: AppSpacing.lg, right: AppSpacing.lg, bottom: bottomInset + AppSpacing.lg, top: AppSpacing.md),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Product name', style: Theme.of(context).textTheme.titleLarge?.semiBold),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            'Start typing to search products synced from Xero.',
+            style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          TextField(
+            controller: _controller,
+            focusNode: _focusNode,
+            onChanged: (v) {
+              setState(() => _query = v);
+              _kickoffSearch();
+            },
+            decoration: InputDecoration(
+              labelText: 'Product name',
+              prefixIcon: Icon(Icons.search, color: cs.onSurfaceVariant),
+              suffixIcon: _isLoading
+                  ? Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary)),
+                    )
+                  : (_query.trim().isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: 'Clear',
+                          onPressed: () {
+                            _controller.clear();
+                            setState(() {
+                              _query = '';
+                              _results = const [];
+                            });
+                          },
+                          icon: Icon(Icons.close, color: cs.onSurfaceVariant),
+                        )),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          if (_query.trim().isEmpty)
+            _HintPanel(icon: Icons.lightbulb_outline, text: 'Try searching by product name, like “Coca” or “Milk”.')
+          else if (!_isLoading && _results.isEmpty)
+            _HintPanel(
+              icon: Icons.search_off,
+              text: 'No matches. If you expect products, confirm Xero sync is running and that you have read access to xero_products.',
+            )
+          else
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 360),
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: _results.length,
+                separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm),
+                itemBuilder: (context, index) {
+                  final p = _results[index];
+                  return _XeroProductSuggestionTile(
+                    product: p,
+                    onTap: () => context.pop(p),
+                  );
+                },
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HintPanel extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  const _HintPanel({required this.icon, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: AppSpacing.paddingLg,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AppRadius.xl),
+        color: cs.surface,
+        border: Border.all(color: cs.outline.withValues(alpha: 0.12)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: cs.onSurfaceVariant),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(child: Text(text, style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant))),
+        ],
+      ),
+    );
+  }
+}
+
+class _XeroProductSuggestionTile extends StatefulWidget {
+  final XeroProduct product;
+  final VoidCallback onTap;
+  const _XeroProductSuggestionTile({required this.product, required this.onTap});
+
+  @override
+  State<_XeroProductSuggestionTile> createState() => _XeroProductSuggestionTileState();
+}
+
+class _XeroProductSuggestionTileState extends State<_XeroProductSuggestionTile> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final p = widget.product;
+    final subtitle = <String>[
+      if ((p.code ?? '').trim().isNotEmpty) 'Code: ${p.code}',
+      if (p.salePriceCents != null) '\$${(p.salePriceCents! / 100).toStringAsFixed(2)}',
+    ].join(' · ');
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          curve: Curves.easeOutCubic,
+          padding: AppSpacing.paddingLg,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AppRadius.xl),
+            color: _hovered ? cs.primaryContainer.withValues(alpha: 0.50) : cs.surface,
+            border: Border.all(color: _hovered ? cs.primary.withValues(alpha: 0.30) : cs.outline.withValues(alpha: 0.12)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(AppRadius.lg),
+                  color: cs.secondaryContainer,
+                ),
+                child: Icon(Icons.inventory_2_outlined, color: cs.onSecondaryContainer),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(p.name, style: Theme.of(context).textTheme.titleMedium?.semiBold),
+                    if (subtitle.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(subtitle, style: Theme.of(context).textTheme.bodySmall?.withColor(cs.onSurfaceVariant)),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Icon(Icons.chevron_right, color: cs.onSurfaceVariant),
+            ],
+          ),
+        ),
       ),
     );
   }

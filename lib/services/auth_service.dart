@@ -1044,6 +1044,12 @@ class AuthService extends ChangeNotifier {
         'id': supaUser.id,
         'email': email,
         'display_name': displayName,
+        // Defensive defaults:
+        // Some deployed DBs enforce NOT NULL on trade fields (company_name/phone_number).
+        // Providing empty strings avoids 23502 errors while still allowing the UI to
+        // prompt the user to fill these in later.
+        'company_name': '',
+        'phone_number': '',
         'updated_at': now.toIso8601String(),
       });
     } on PostgrestException catch (e) {
