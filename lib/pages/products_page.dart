@@ -927,75 +927,86 @@ class _XeroProductNamePickerSheetState extends State<_XeroProductNamePickerSheet
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
-    return Padding(
-      padding: EdgeInsets.only(left: AppSpacing.lg, right: AppSpacing.lg, bottom: bottomInset + AppSpacing.lg, top: AppSpacing.md),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Product name', style: Theme.of(context).textTheme.titleLarge?.semiBold),
-          const SizedBox(height: AppSpacing.xs),
-          Text(
-            'Start typing to search products synced from Xero.',
-            style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          TextField(
-            controller: _controller,
-            focusNode: _focusNode,
-            onChanged: (v) {
-              setState(() => _query = v);
-              _kickoffSearch();
-            },
-            decoration: InputDecoration(
-              labelText: 'Product name',
-              prefixIcon: Icon(Icons.search, color: cs.onSurfaceVariant),
-              suffixIcon: _isLoading
-                  ? Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary)),
-                    )
-                  : (_query.trim().isEmpty
-                      ? null
-                      : IconButton(
-                          tooltip: 'Clear',
-                          onPressed: () {
-                            _controller.clear();
-                            setState(() {
-                              _query = '';
-                              _results = const [];
-                            });
-                          },
-                          icon: Icon(Icons.close, color: cs.onSurfaceVariant),
-                        )),
+    // Give the sheet a predictable height so the results list has room to
+    // scroll (instead of the sheet sizing itself to content).
+    final sheetHeight = MediaQuery.sizeOf(context).height * 0.72;
+
+    return SizedBox(
+      height: sheetHeight,
+      child: Padding(
+        // Note: keyboard + bottom bar padding is handled by BottomSheetAboveNavBar.
+        padding: const EdgeInsets.only(left: AppSpacing.lg, right: AppSpacing.lg, bottom: AppSpacing.lg, top: AppSpacing.md),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Product name', style: Theme.of(context).textTheme.titleLarge?.semiBold),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              'Start typing to search products synced from Xero.',
+              style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
             ),
-          ),
-          const SizedBox(height: AppSpacing.md),
-          if (_query.trim().isEmpty)
-            _HintPanel(icon: Icons.lightbulb_outline, text: 'Try searching by product name, like “Coca” or “Milk”.')
-          else if (!_isLoading && _results.isEmpty)
-            _HintPanel(
-              icon: Icons.search_off,
-              text: 'No matches. If you expect products, confirm Xero sync is running and that you have read access to xero_products.',
-            )
-          else
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 360),
-              child: ListView.separated(
-                shrinkWrap: true,
-                itemCount: _results.length,
-                separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm),
-                itemBuilder: (context, index) {
-                  final p = _results[index];
-                  return _XeroProductSuggestionTile(
-                    product: p,
-                    onTap: () => context.pop(p),
-                  );
-                },
+            const SizedBox(height: AppSpacing.lg),
+            TextField(
+              controller: _controller,
+              focusNode: _focusNode,
+              onChanged: (v) {
+                setState(() => _query = v);
+                _kickoffSearch();
+              },
+              decoration: InputDecoration(
+                labelText: 'Product name',
+                prefixIcon: Icon(Icons.search, color: cs.onSurfaceVariant),
+                suffixIcon: _isLoading
+                    ? Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary)),
+                      )
+                    : (_query.trim().isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: 'Clear',
+                            onPressed: () {
+                              _controller.clear();
+                              setState(() {
+                                _query = '';
+                                _results = const [];
+                              });
+                            },
+                            icon: Icon(Icons.close, color: cs.onSurfaceVariant),
+                          )),
               ),
             ),
-        ],
+            const SizedBox(height: AppSpacing.md),
+            Expanded(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 160),
+                switchInCurve: Curves.easeOut,
+                switchOutCurve: Curves.easeIn,
+                child: _query.trim().isEmpty
+                    ? const _HintPanel(key: ValueKey('hint'), icon: Icons.lightbulb_outline, text: 'Try searching by product name, like “Coca” or “Milk”.')
+                    : (!_isLoading && _results.isEmpty)
+                        ? const _HintPanel(
+                            key: ValueKey('empty'),
+                            icon: Icons.search_off,
+                            text: 'No matches. If you expect products, confirm Xero sync is running and that you have read access to xero_products.',
+                          )
+                        : ListView.separated(
+                            key: const ValueKey('results'),
+                            padding: EdgeInsets.zero,
+                            itemCount: _results.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm),
+                            itemBuilder: (context, index) {
+                              final p = _results[index];
+                              return _XeroProductSuggestionTile(
+                                product: p,
+                                onTap: () => context.pop(p),
+                              );
+                            },
+                          ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1004,7 +1015,7 @@ class _XeroProductNamePickerSheetState extends State<_XeroProductNamePickerSheet
 class _HintPanel extends StatelessWidget {
   final IconData icon;
   final String text;
-  const _HintPanel({required this.icon, required this.text});
+  const _HintPanel({super.key, required this.icon, required this.text});
 
   @override
   Widget build(BuildContext context) {

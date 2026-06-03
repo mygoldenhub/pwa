@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:pwa/components/app_logo.dart';
 import 'package:pwa/theme.dart';
 
 enum AppHeaderTone { light, dark }
@@ -69,6 +70,11 @@ class _HeaderTitlePill extends StatelessWidget {
 
   const _HeaderTitlePill({required this.label, required this.tone});
 
+  bool _shouldUseSmallLogo(String label) {
+    final l = label.trim().toLowerCase();
+    return l == 'cart' || l == 'invoice' || l == 'invoices' || l == 'account' || l == 'product' || l == 'products';
+  }
+
   IconData _iconForLabel(String label) {
     final l = label.trim().toLowerCase();
     if (l == 'cart') return Icons.shopping_cart_outlined;
@@ -90,9 +96,14 @@ class _HeaderTitlePill extends StatelessWidget {
     final border = isDark ? Colors.white.withValues(alpha: 0.16) : cs.outline.withValues(alpha: 0.14);
     final fg = isDark ? Colors.white : cs.onSurface;
 
+    final useSmallLogo = _shouldUseSmallLogo(label);
     final icon = _iconForLabel(label);
     final iconBg = isDark ? Colors.white.withValues(alpha: 0.10) : cs.primaryContainer;
     final iconFg = isDark ? Colors.white : cs.onPrimaryContainer;
+
+    const pillIconOuter = 42.0;
+    const pillIconPadding = 4.0;
+    const pillLogoSize = 32.0;
 
     return Semantics(
       label: label,
@@ -109,10 +120,20 @@ class _HeaderTitlePill extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 34,
-              height: 34,
+              width: pillIconOuter,
+              height: pillIconOuter,
               decoration: BoxDecoration(color: iconBg, borderRadius: BorderRadius.circular(999)),
-              child: Icon(icon, color: iconFg, size: 18),
+              child: useSmallLogo
+                  ? const Padding(
+                      padding: EdgeInsets.all(pillIconPadding),
+                      child: AppLogo(
+                        size: pillLogoSize,
+                        assetPath: AppAssets.smallLogo,
+                        borderRadius: BorderRadius.all(Radius.circular(8)),
+                        fit: BoxFit.contain,
+                      ),
+                    )
+                  : Icon(icon, color: iconFg, size: 20),
             ),
             const SizedBox(width: 12),
             Text(

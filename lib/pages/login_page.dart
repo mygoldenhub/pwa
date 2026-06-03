@@ -120,10 +120,17 @@ class _LoginPageState extends State<LoginPage> {
               obscureText: true,
               maxLength: 4,
               buildCounter: (context, {required currentLength, required isFocused, maxLength}) => null,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'PIN (4 digits)',
-                prefixIcon: Icon(Icons.pin_outlined),
-                helperText: 'If this is a new device, you may need to sign in once with password.',
+                prefixIcon: const Icon(Icons.pin_outlined),
+                helper: Center(
+                  child: Text(
+                    'If this is a new device, you may need to sign in once with password.',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).inputDecorationTheme.helperStyle ??
+                        Theme.of(context).textTheme.bodySmall?.withColor(cs.onSurfaceVariant),
+                  ),
+                ),
               ),
               onSubmitted: (_) => _submit(),
             ),
