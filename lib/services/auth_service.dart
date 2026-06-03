@@ -539,12 +539,24 @@ class AuthService extends ChangeNotifier {
     }
   }
 
-  Future<void> requestSignupEmailCode({required String email, required String displayName}) async {
+  /// Sends a 6-digit email code for signup.
+  ///
+  /// IMPORTANT: This should only trigger the email, and must NOT persist any
+  /// account/profile info into Supabase Auth (user_metadata) at this step.
+  Future<void> requestSignupEmailCode({required String email}) async {
     _isLoading = true;
     notifyListeners();
     try {
-      final normalized = email.trim();
+      final normalized = email.trim().toLowerCase();
       if (normalized.isEmpty || !normalized.contains('@')) throw Exception('Please enter a valid email.');
+
+      // IMPORTANT: For this project, “email already exists” checks must be done
+      // against our own profile table (public.users), NOT against Supabase Auth.
+      // (Auth checks require an Edge Function and can leak account existence.)
+      final existsInUsers = await emailExistsInUsersTable(email: normalized);
+      if (existsInUsers) {
+        throw Exception('Email is already exist');
+      }
 
       // Supabase decides whether it sends a magic link or an OTP code based on your Auth settings + templates.
       // This call requests an OTP-based sign-in/signup.
@@ -552,9 +564,6 @@ class AuthService extends ChangeNotifier {
           .signInWithOtp(
         email: normalized,
         shouldCreateUser: true,
-        data: {
-          'display_name': displayName.trim(),
-        },
       )
           .timeout(_authTimeout);
     } on AuthException catch (e) {
@@ -566,6 +575,56 @@ class AuthService extends ChangeNotifier {
     } finally {
       _isLoading = false;
       notifyListeners();
+    }
+  }
+
+  /// Checks whether a profile row already exists in `public.users` for [email].
+  ///
+  /// This is used for the signup “Send code” step.
+  ///
+  /// NOTE: This requires your `public.users` RLS policies to allow a read for
+  /// the email being checked (commonly via a restricted policy or a security
+  /// definer RPC). If RLS blocks this query, we throw an actionable error.
+  Future<bool> emailExistsInUsersTable({required String email}) async {
+    final normalized = email.trim().toLowerCase();
+    if (normalized.isEmpty || !normalized.contains('@')) throw Exception('Please enter a valid email.');
+    try {
+      // IMPORTANT:
+      // In many Supabase setups, requesting an OTP with `shouldCreateUser: true`
+      // creates an Auth user immediately (even if the user never verifies the code).
+      // Projects often have a DB trigger that auto-creates a *placeholder* row in
+      // public.users for that new auth.user.
+      //
+      // If we simply block on “row exists”, users who tapped “Send code” once and
+      // then abandoned signup will be permanently blocked by “Email already exist”.
+      //
+      // Therefore we only treat the email as "taken" when the profile appears
+      // completed (trade fields and/or PIN set).
+      final row = await SupabaseService.selectSingle(
+        'users',
+        select: 'id, company_name, phone_number, xero_account_id, pin_hash',
+        filters: {'email': normalized},
+      );
+      if (row == null) return false;
+
+      String _s(dynamic v) => (v ?? '').toString().trim();
+      final company = _s(row['company_name']);
+      final phone = _s(row['phone_number']);
+      final xero = _s(row['xero_account_id']);
+      final pinHash = _s(row['pin_hash']);
+
+      final looksCompleted = company.isNotEmpty || phone.isNotEmpty || xero.isNotEmpty || pinHash.isNotEmpty;
+      return looksCompleted;
+    } on PostgrestException catch (e) {
+      debugPrint('AuthService.emailExistsInUsersTable failed: ${e.message} (code: ${e.code})');
+      // 42501 is the most common code when RLS blocks access.
+      if ((e.code ?? '').toString() == '42501') {
+        throw Exception('Unable to validate email (RLS blocked public.users). Please update your users table SELECT policy.');
+      }
+      throw Exception('Unable to validate email. Please try again.');
+    } catch (e) {
+      debugPrint('AuthService.emailExistsInUsersTable failed: $e');
+      rethrow;
     }
   }
 
@@ -581,7 +640,7 @@ class AuthService extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
     try {
-      final normalized = email.trim();
+      final normalized = email.trim().toLowerCase();
       if (normalized.isEmpty || !normalized.contains('@')) throw Exception('Please enter a valid email.');
       final token = code.trim();
       if (token.length != 6 || token.contains(RegExp(r'\D'))) throw Exception('Please enter the 6-digit code.');
@@ -590,36 +649,23 @@ class AuthService extends ChangeNotifier {
       if (companyName.trim().isEmpty) throw Exception('Please enter your company name.');
       if (phoneNumber.trim().isEmpty) throw Exception('Please enter your phone number.');
 
+      // IMPORTANT:
+      // `signInWithOtp(email: ..., shouldCreateUser: true)` sends an email OTP that must be
+      // verified using `OtpType.email`.
+      // Using `OtpType.signup` here causes Supabase to reject valid codes with:
+      //   "Token has expired or is invalid"
       final res = await SupabaseConfig.auth
-          .verifyOTP(
-        type: OtpType.signup,
-        email: normalized,
-        token: token,
-      )
+          .verifyOTP(type: OtpType.email, email: normalized, token: token)
           .timeout(_authTimeout);
 
       final supaUser = res.user ?? SupabaseConfig.auth.currentUser;
       if (supaUser == null) throw Exception('Verification succeeded, but no user was returned. Please try signing in.');
 
-      // Attach password to the now-authenticated user.
+      // IMPORTANT:
+      // From this point forward, Flutter should NOT create/update the auth user
+      // or upsert the profile directly. We delegate ALL account finalization to
+      // the Edge Function (Xero + password + profile + PIN).
       try {
-        await SupabaseConfig.auth
-            .updateUser(UserAttributes(
-          password: password,
-          data: {
-            'display_name': displayName.trim(),
-          },
-        ))
-            .timeout(_authTimeout);
-      } on AuthException catch (e) {
-        debugPrint('AuthService.verifySignupEmailCode updateUser error: ${e.message}');
-        throw Exception(_friendlyAuthMessage(e));
-      }
-
-      // 1) Upsert user in Xero (server-side Edge Function) to get Xero ContactID.
-      String? xeroContactId;
-      try {
-        // Uses Xero Custom Connection (client_credentials) – no refresh_token required.
         const fnName = 'xero_upsert_contact_cc';
         final debugUrl = SupabaseConfig.edgeFunctionUrl(fnName);
         debugPrint('AuthService.verifySignupEmailCode: invoking $fnName at $debugUrl');
@@ -628,80 +674,39 @@ class AuthService extends ChangeNotifier {
             .invoke(
               fnName,
               body: {
-                'full_name': displayName.trim(),
-                'email': normalized.trim().toLowerCase(),
-                'company_name': companyName.trim(),
-                'phone_number': phoneNumber.trim(),
+                'user_id': supaUser.id,
+                'name': displayName.trim(),
+                'email': normalized,
+                'company': companyName.trim(),
+                'phone': phoneNumber.trim(),
+                'pin': pin.trim(),
+                'password': password,
               },
               headers: const {'content-type': 'application/json'},
             )
-            .timeout(const Duration(seconds: 18));
+            .timeout(const Duration(seconds: 25));
 
         final data = res.data;
-        if (data is Map && data['contactId'] is String) {
-          xeroContactId = (data['contactId'] as String).trim();
-        }
-        if (xeroContactId == null || xeroContactId.isEmpty) {
-          debugPrint('AuthService.verifySignupEmailCode: $fnName unexpected response: ${res.data}');
-          throw Exception('Failed to create your Xero account. Please try again.');
+        if (data is Map) {
+          final ok = data['ok'];
+          if (ok is bool && !ok) {
+            final msg = (data['message'] ?? data['error'] ?? 'Signup failed').toString();
+            throw Exception(msg);
+          }
         }
       } catch (e) {
-        debugPrint('AuthService.verifySignupEmailCode: Xero upsert failed: $e');
-        final msg = e.toString().toLowerCase();
-        if (msg.contains('xero_invalid_scope') || msg.contains('invalid_scope') || msg.contains('no valid scopes remaining')) {
-          throw Exception(
-            "Xero isn't configured for machine-to-machine sync. Your Xero app must be a Custom Connection (client_credentials) and its scopes must include 'accounting.contacts'. Also ensure your Edge Function secret XERO_SCOPES does NOT include offline_access/openid/profile/email.",
-          );
-        }
-        if (msg.contains('failed to fetch') || msg.contains('clientfailed') || msg.contains('clientexception')) {
-          throw Exception(
-            'Xero service is unreachable. Please deploy the Edge Function and set its secrets: ${SupabaseConfig.edgeFunctionUrl('xero_upsert_contact_cc')}',
-          );
-        }
+        debugPrint('AuthService.verifySignupEmailCode edge function failed: $e');
         rethrow;
       }
 
-      // 2) Upsert the profile row (and save the extended fields) to public.users.
-      // We do this BEFORE setting the PIN so `public.set_user_pin()` won't fail with
-      // "Profile row not found".
-      try {
-        final now = DateTime.now().toUtc().toIso8601String();
-        await SupabaseService.from('users').upsert({
-          'id': supaUser.id,
-          'email': (supaUser.email ?? normalized).trim(),
-          'display_name': displayName.trim(),
-          'company_name': companyName.trim(),
-          'phone_number': phoneNumber.trim(),
-          'xero_account_id': xeroContactId,
-          'updated_at': now,
-        });
-      } on PostgrestException catch (e) {
-        debugPrint('AuthService.verifySignupEmailCode: profile update blocked/failed: ${e.message} (code: ${e.code})');
-      } catch (e) {
-        debugPrint('AuthService.verifySignupEmailCode: profile update failed: $e');
-      }
+      // Update local preferences for PIN login convenience.
+      _pinEnabled = true;
+      _lastEmail = normalized;
+      await _savePasswordForEmail(email: normalized, password: password);
+      await _savePrefs();
 
+      // Re-load profile (expects edge function already upserted public.users).
       final profile = await _loadOrCreateProfile(supaUser, displayNameHint: displayName);
-
-      // Store PIN hash in public.users.
-      try {
-        await _waitForSessionReady(expectedUserId: supaUser.id);
-        await SupabaseConfig.client.rpc('set_user_pin', params: {'pin_input': pin.trim()});
-        // Immediately verify we can validate it (prevents silent misconfiguration).
-        final ok = await _verifyPinViaRpcWithRetry(pin: pin, expectedUserId: supaUser.id);
-        if (!ok) throw Exception('PIN could not be saved correctly. Please try again.');
-
-        _pinEnabled = true;
-        _lastEmail = normalized.toLowerCase();
-        await _savePasswordForEmail(email: normalized, password: password);
-        await _savePrefs();
-      } on PostgrestException catch (e) {
-        debugPrint('AuthService.verifySignupEmailCode set/verify pin failed: ${e.message} (code: ${e.code})');
-        throw _friendlyPinRpcException(e);
-      } catch (e) {
-        debugPrint('AuthService.verifySignupEmailCode set/verify pin failed: $e');
-        rethrow;
-      }
       _currentUser = profile;
       notifyListeners();
       return profile;

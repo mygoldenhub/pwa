@@ -138,10 +138,7 @@ class _VerifyEmailCodePageState extends State<VerifyEmailCodePage> {
     if (_resending || _remaining != Duration.zero) return;
     setState(() => _resending = true);
     try {
-      await widget.appState.auth.requestSignupEmailCode(
-        email: widget.email,
-        displayName: widget.displayName,
-      );
+      await widget.appState.auth.requestSignupEmailCode(email: widget.email);
       if (!mounted) return;
       _startTimer();
       ScaffoldMessenger.of(context).showSnackBar(

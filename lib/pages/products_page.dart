@@ -4,9 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/app_state.dart';
 import 'package:pwa/components/app_header.dart';
-import 'package:pwa/models/product.dart';
+import 'package:pwa/models/cart_item.dart';
 import 'package:pwa/models/xero_product.dart';
 import 'package:pwa/nav.dart';
+import 'package:pwa/services/cart_service.dart';
 import 'package:pwa/services/xero_product_service.dart';
 import 'package:pwa/theme.dart';
 
@@ -127,6 +128,11 @@ class _ProductsPageState extends State<ProductsPage> {
   String _query = '';
   bool _handledRouteExtra = false;
 
+  // Optimistic cart UI overrides so the summary updates instantly, without
+  // waiting for the Supabase stream round-trip.
+  final Map<String, int> _qtyOverrides = <String, int>{};
+  final Set<String> _pendingRemovals = <String>{};
+
   void _showSavedNotification() {
     final cs = Theme.of(context).colorScheme;
     ScaffoldMessenger.of(context)
@@ -244,89 +250,167 @@ class _ProductsPageState extends State<ProductsPage> {
     }
   }
 
-  void _openEditProduct(String id) async {
-    final saved = await context.push<bool>(AppRoutes.productEdit(id));
-    if (!mounted) return;
-    if (saved == true) _showSavedNotification();
-  }
-
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: widget.appState.products,
-      builder: (context, _) {
-        final cs = Theme.of(context).colorScheme;
-        final products = widget.appState.products.products;
-        final filtered = products.where((p) {
-          if (_query.trim().isEmpty) return true;
-          final q = _query.trim().toLowerCase();
-          return p.name.toLowerCase().contains(q) || (p.barcode ?? '').toLowerCase().contains(q);
-        }).toList();
+    return Scaffold(
+      appBar: AppImpactHeader(
+        title: 'Cart',
+        actions: [
+          _HeaderActionButton(
+            label: 'Scan',
+            icon: Icons.add,
+            onTap: _openScanChooser,
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: AppSpacing.paddingLg,
+          child: Column(
+            children: [
+              _SearchBar(
+                onChanged: (v) => setState(() => _query = v),
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              Expanded(
+                child: StreamBuilder<List<CartItem>>(
+                  stream: CartService.streamMyCart(),
+                  builder: (context, snap) {
+                    if (snap.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (snap.hasError) {
+                      debugPrint('ProductsPage(cart): stream error: ${snap.error}');
+                      return _EmptyState(
+                        title: 'Couldn\'t load cart',
+                        subtitle: 'Please try again. If this keeps happening, check your Supabase RLS policies.',
+                        onPrimaryAction: _openScanChooser,
+                      );
+                    }
 
-        return Scaffold(
-          appBar: AppImpactHeader(
-            title: 'Cart',
-            actions: [
-              _HeaderActionButton(
-                label: 'Scan',
-                icon: Icons.add,
-                onTap: _openScanChooser,
+                    final rawItems = (snap.data ?? <CartItem>[]);
+
+                    // If the stream has removed items we optimistically hid, drop them from the pending set.
+                    final rawIds = rawItems.map((e) => e.id).toSet();
+                    _pendingRemovals.removeWhere((id) => !rawIds.contains(id));
+
+                    final itemsForList = rawItems
+                        .map((i) => _qtyOverrides.containsKey(i.id) ? i.copyWith(quantity: _qtyOverrides[i.id]) : i)
+                        .toList();
+
+                    // Exclude pending removals from totals, so summary updates instantly.
+                    final itemsForSummary = itemsForList.where((i) => !_pendingRemovals.contains(i.id)).toList();
+
+                    // If the stream has caught up, clear redundant overrides.
+                    for (final i in rawItems) {
+                      final o = _qtyOverrides[i.id];
+                      if (o != null && o == i.quantity) {
+                        _qtyOverrides.remove(i.id);
+                      }
+                    }
+
+                    final q = _query.trim().toLowerCase();
+                    final filtered = q.isEmpty ? itemsForList : _filterAndRankCartItems(itemsForList, q);
+
+                    final visibleFiltered = filtered.where((i) => !_pendingRemovals.contains(i.id)).toList();
+                    if (visibleFiltered.isEmpty) {
+                      return _EmptyState(
+                        title: itemsForSummary.isEmpty ? 'Your cart is empty' : 'No matches',
+                        subtitle: itemsForSummary.isEmpty
+                            ? 'Scan a barcode or search by product name to add items.'
+                            : 'Try a different product name.',
+                        onPrimaryAction: _openScanChooser,
+                      );
+                    }
+
+                    final subtotalCents = itemsForSummary.fold<int>(0, (sum, i) => sum + (i.unitPriceCents ?? 0) * i.quantity);
+                    final subtotal = (subtotalCents / 100).toStringAsFixed(2);
+                    final totalUnits = itemsForSummary.fold<int>(0, (sum, i) => sum + i.quantity);
+
+                    return Column(
+                      children: [
+                        _CartSummaryCard(
+                          subtotal: subtotal,
+                          distinctCount: itemsForSummary.length,
+                          unitCount: totalUnits,
+                          onCheckout: itemsForSummary.isEmpty ? null : () => context.go(AppRoutes.invoice),
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        Expanded(
+                          child: _CartList(
+                            items: filtered,
+                            isDeleting: (id) => _pendingRemovals.contains(id),
+                            onSetQty: (item, newQty) async {
+                              final q = newQty.clamp(1, 999);
+                              if (_pendingRemovals.contains(item.id)) return;
+                              if (q == item.quantity) return;
+
+                              final prev = item.quantity;
+                              setState(() => _qtyOverrides[item.id] = q);
+                              try {
+                                await CartService.updateQuantity(cartItemId: item.id, quantity: q);
+                              } catch (e) {
+                                debugPrint('ProductsPage(cart): update qty failed: $e');
+                                if (!mounted) return;
+                                setState(() {
+                                  if (prev == (rawItems.firstWhere((r) => r.id == item.id, orElse: () => item).quantity)) {
+                                    _qtyOverrides.remove(item.id);
+                                  } else {
+                                    _qtyOverrides[item.id] = prev;
+                                  }
+                                });
+                                if (!context.mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Failed to update quantity.')),
+                                );
+                              }
+                            },
+                            onDelete: (item) async {
+                              if (_pendingRemovals.contains(item.id)) return;
+                              setState(() => _pendingRemovals.add(item.id));
+                              try {
+                                await CartService.deleteItem(cartItemId: item.id);
+                                // Keep the item hidden until the stream confirms removal.
+                                if (!mounted) return;
+                                setState(() => _qtyOverrides.remove(item.id));
+                              } catch (e) {
+                                debugPrint('ProductsPage(cart): delete failed: $e');
+                                if (!mounted) return;
+                                setState(() => _pendingRemovals.remove(item.id));
+                                if (!context.mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Failed to remove item.')),
+                                );
+                              }
+                            },
+                          )
+                        ),
+                      ],
+                    );
+                  },
+                ),
               ),
             ],
           ),
-          body: SafeArea(
-            child: Padding(
-              padding: AppSpacing.paddingLg,
-              child: Column(
-                children: [
-                  _SearchBar(
-                    onChanged: (v) => setState(() => _query = v),
-                  ),
-                  const SizedBox(height: AppSpacing.lg),
-                  Expanded(
-                    child: filtered.isEmpty
-                        ? _EmptyState(
-                            title: 'Your cart is empty',
-                              subtitle: 'Scan or add an item in the search bar above to get started.',
-                             onPrimaryAction: _openScanChooser,
-                          )
-                        : ListView.separated(
-                            itemCount: filtered.length,
-                            separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.md),
-                            itemBuilder: (context, index) {
-                              final p = filtered[index];
-                              return _ProductTile(
-                                product: p,
-                                onTap: () => _openEditProduct(p.id),
-                                onDelete: () async {
-                                  final ok = await showModalBottomSheet<bool>(
-                                    context: context,
-                                    showDragHandle: true,
-                                    builder: (context) {
-                                      return _ConfirmDeleteSheet(product: p);
-                                    },
-                                  );
-                                  if (ok != true) return;
-                                  if (!mounted) return;
-                                  await widget.appState.products.deleteById(p.id);
-
-                                  // Force a refresh to reflect server state (and handle
-                                  // any RLS-triggered deletes / cascades).
-                                  await widget.appState.products.refresh();
-                                  if (!mounted) return;
-                                  _showDeletedNotification();
-                                },
-                              );
-                            },
-                          ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
+        ),
+      ),
     );
+  }
+
+  List<CartItem> _filterAndRankCartItems(List<CartItem> items, String qLower) {
+    final prefix = <CartItem>[];
+    final contains = <CartItem>[];
+    for (final i in items) {
+      final name = i.productName.toLowerCase();
+      if (name.startsWith(qLower)) {
+        prefix.add(i);
+      } else if (name.contains(qLower)) {
+        contains.add(i);
+      }
+    }
+    prefix.sort((a, b) => a.productName.toLowerCase().compareTo(b.productName.toLowerCase()));
+    contains.sort((a, b) => a.productName.toLowerCase().compareTo(b.productName.toLowerCase()));
+    return [...prefix, ...contains];
   }
 }
 
@@ -339,9 +423,309 @@ class _SearchBar extends StatelessWidget {
     return TextField(
       onChanged: onChanged,
       decoration: const InputDecoration(
-        labelText: 'Search by name or barcode',
+        labelText: 'Search by product name',
         prefixIcon: Icon(Icons.search),
       ),
+    );
+  }
+}
+
+class _CartSummaryCard extends StatelessWidget {
+  final String subtotal;
+  final int distinctCount;
+  final int unitCount;
+  final VoidCallback? onCheckout;
+  const _CartSummaryCard({required this.subtotal, required this.distinctCount, required this.unitCount, required this.onCheckout});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: AppSpacing.paddingLg,
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(AppRadius.xl),
+        border: Border.all(color: cs.outline.withValues(alpha: 0.12)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: cs.primaryContainer,
+                  borderRadius: BorderRadius.circular(AppRadius.lg),
+                ),
+                child: Icon(Icons.shopping_cart, color: cs.onPrimaryContainer),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Cart summary', style: Theme.of(context).textTheme.titleMedium?.semiBold),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$distinctCount product${distinctCount == 1 ? '' : 's'} · $unitCount unit${unitCount == 1 ? '' : 's'}',
+                      style: Theme.of(context).textTheme.bodySmall?.withColor(cs.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text('Subtotal', style: Theme.of(context).textTheme.bodySmall?.withColor(cs.onSurfaceVariant)),
+                  const SizedBox(height: 2),
+                  Text('\$$subtotal', style: Theme.of(context).textTheme.titleLarge?.semiBold),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.md),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: onCheckout,
+              icon: Icon(Icons.payments_outlined, color: cs.onPrimary),
+              label: Text('Checkout', style: TextStyle(color: cs.onPrimary)),
+              style: FilledButton.styleFrom(
+                backgroundColor: cs.primary,
+                disabledBackgroundColor: cs.primary.withValues(alpha: 0.35),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CartList extends StatelessWidget {
+  final List<CartItem> items;
+  final bool Function(String cartItemId) isDeleting;
+  final Future<void> Function(CartItem item, int newQty) onSetQty;
+  final Future<void> Function(CartItem item) onDelete;
+
+  const _CartList({required this.items, required this.isDeleting, required this.onSetQty, required this.onDelete});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.separated(
+      padding: EdgeInsets.zero,
+      itemCount: items.length,
+      separatorBuilder: (context, index) => const SizedBox(height: AppSpacing.md),
+      itemBuilder: (context, index) => _CartItemCard(
+        item: items[index],
+        isDeleting: isDeleting(items[index].id),
+        onSetQty: (q) => onSetQty(items[index], q),
+        onDelete: () => onDelete(items[index]),
+      ),
+    );
+  }
+}
+
+class _CartItemCard extends StatefulWidget {
+  final CartItem item;
+  final bool isDeleting;
+  final Future<void> Function(int newQty) onSetQty;
+  final Future<void> Function() onDelete;
+  const _CartItemCard({required this.item, required this.isDeleting, required this.onSetQty, required this.onDelete});
+
+  @override
+  State<_CartItemCard> createState() => _CartItemCardState();
+}
+
+class _CartItemCardState extends State<_CartItemCard> {
+  bool _updating = false;
+  Future<void> _setQty(int newQty) async {
+    if (_updating || widget.isDeleting) return;
+    final q = newQty.clamp(1, 999);
+    if (q == widget.item.quantity) return;
+    setState(() => _updating = true);
+    try {
+      await widget.onSetQty(q);
+    } finally {
+      if (mounted) setState(() => _updating = false);
+    }
+  }
+
+  Future<void> _delete() async {
+    if (widget.isDeleting) return;
+    await widget.onDelete();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    final priceCents = widget.item.unitPriceCents ?? 0;
+    final price = (priceCents / 100).toStringAsFixed(2);
+    final qty = widget.item.quantity;
+
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 140),
+      opacity: widget.isDeleting ? 0.0 : 1.0,
+      child: AnimatedSize(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        alignment: Alignment.topCenter,
+        child: widget.isDeleting
+            ? const SizedBox.shrink()
+            : AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOutCubic,
+                padding: AppSpacing.paddingLg,
+                decoration: BoxDecoration(
+                  color: cs.surface,
+                  borderRadius: BorderRadius.circular(AppRadius.xl),
+                  border: Border.all(color: cs.outline.withValues(alpha: 0.12)),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.item.productName,
+                            style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w800, fontSize: 18),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            (widget.item.productCode == null || widget.item.productCode!.trim().isEmpty)
+                                ? 'SKU: —'
+                                : 'SKU: ${widget.item.productCode}',
+                            style: tt.bodyMedium?.withColor(cs.onSurfaceVariant),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: AppSpacing.md),
+                          Text(
+                            '\$$price',
+                            style: tt.titleLarge?.copyWith(fontWeight: FontWeight.w900),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.md),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        _QtyStepper(
+                          quantity: qty,
+                          isLoading: _updating,
+                          onDecrement: () => _setQty(qty - 1),
+                          onIncrement: () => _setQty(qty + 1),
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        IconButton(
+                          tooltip: 'Remove',
+                          onPressed: (_updating || widget.isDeleting) ? null : _delete,
+                          style: IconButton.styleFrom(
+                            backgroundColor: cs.surfaceContainerHighest,
+                            foregroundColor: cs.error,
+                            splashFactory: NoSplash.splashFactory,
+                          ),
+                          icon: const Icon(Icons.delete_outline),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+      ),
+    );
+  }
+}
+
+class _QtyStepper extends StatelessWidget {
+  final int quantity;
+  final bool isLoading;
+  final VoidCallback onDecrement;
+  final VoidCallback onIncrement;
+
+  const _QtyStepper({
+    required this.quantity,
+    required this.isLoading,
+    required this.onDecrement,
+    required this.onIncrement,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: cs.outline.withValues(alpha: 0.10)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _QtyIconButton(
+            icon: Icons.remove,
+            enabled: !isLoading && quantity > 1,
+            onTap: onDecrement,
+          ),
+          const SizedBox(width: 12),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 160),
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            transitionBuilder: (child, anim) => ScaleTransition(scale: anim, child: child),
+            child: Text(
+              '$quantity',
+              key: ValueKey(quantity),
+              style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w900, fontSize: 18),
+            ),
+          ),
+          const SizedBox(width: 12),
+          _QtyIconButton(
+            icon: Icons.add,
+            enabled: !isLoading && quantity < 999,
+            onTap: onIncrement,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _QtyIconButton extends StatelessWidget {
+  final IconData icon;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  const _QtyIconButton({required this.icon, required this.enabled, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return IconButton(
+      constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+      padding: EdgeInsets.zero,
+      onPressed: enabled ? onTap : null,
+      style: IconButton.styleFrom(
+        backgroundColor: cs.surface,
+        foregroundColor: enabled ? cs.primary : cs.onSurfaceVariant.withValues(alpha: 0.45),
+        splashFactory: NoSplash.splashFactory,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      icon: Icon(icon, size: 18),
     );
   }
 }
@@ -381,80 +765,6 @@ class _HeaderActionButton extends StatelessWidget {
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ProductTile extends StatelessWidget {
-  final Product product;
-  final VoidCallback onTap;
-  final VoidCallback onDelete;
-
-  const _ProductTile({required this.product, required this.onTap, required this.onDelete});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final price = (product.priceCents / 100).toStringAsFixed(2);
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(AppRadius.lg),
-      child: Container(
-        padding: AppSpacing.paddingLg,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(AppRadius.lg),
-          color: cs.surface,
-          border: Border.all(color: cs.outline.withValues(alpha: 0.12)),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: cs.primaryContainer,
-                borderRadius: BorderRadius.circular(AppRadius.md),
-              ),
-              child: Icon(Icons.inventory_2, color: cs.onPrimaryContainer),
-            ),
-            const SizedBox(width: AppSpacing.md),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(product.name, style: Theme.of(context).textTheme.titleMedium?.semiBold),
-                  const SizedBox(height: AppSpacing.xs),
-                  Text(
-                    'Barcode: ${product.barcode ?? '—'} · Stock: ${product.stockQty}',
-                    style: Theme.of(context).textTheme.bodySmall?.withColor(cs.onSurfaceVariant),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: AppSpacing.md),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  '\$$price',
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleMedium
-                      ?.semiBold
-                      .withColor(cs.primary),
-                ),
-                const SizedBox(height: AppSpacing.xs),
-                IconButton(
-                  tooltip: 'Delete',
-                  onPressed: onDelete,
-                  icon: Icon(Icons.delete_outline, color: cs.error),
-                ),
-              ],
-            ),
-          ],
         ),
       ),
     );
@@ -514,51 +824,6 @@ class _EmptyState extends StatelessWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _ConfirmDeleteSheet extends StatelessWidget {
-  final Product product;
-  const _ConfirmDeleteSheet({required this.product});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Padding(
-      padding: AppSpacing.paddingLg,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Delete product?', style: Theme.of(context).textTheme.titleLarge?.semiBold),
-          const SizedBox(height: AppSpacing.xs),
-          Text(
-            product.name,
-            style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => context.pop(false),
-                  child: const Text('Cancel'),
-                ),
-              ),
-              const SizedBox(width: AppSpacing.md),
-              Expanded(
-                child: FilledButton(
-                  onPressed: () => context.pop(true),
-                  style: FilledButton.styleFrom(backgroundColor: cs.error),
-                  child: Text('Delete', style: TextStyle(color: cs.onError)),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.md),
-        ],
       ),
     );
   }

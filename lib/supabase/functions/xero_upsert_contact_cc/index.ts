@@ -1,19 +1,19 @@
-/// Supabase Edge Function: xero_upsert_contact_cc
-///
-/// Find-or-create a Xero Contact (customer) by email and return its ContactID.
-///
-/// This function is configured with verify_jwt=false so it can be called before
-/// a Supabase account exists.
-///
-/// Required secrets:
-/// - XERO_CLIENT_ID
-/// - XERO_CLIENT_SECRET
-/// - XERO_TENANT_ID              (optional if stored in DB; DB value will be used if unset)
-///
-/// DB requirement:
-/// - public.xero_tokens must contain at least one row with refresh_token (and ideally tenant_id)
-
+// lib/supabase/functions/xero_upsert_contact_cc/index.ts
+//
+// Updated logic (webhook-driven signup):
+// 1) Receive { name, email, company, phone, pin, password }
+// 2) Call Make.com webhook to create Xero contact/account and return xero_account_id
+// 3) Create Supabase Auth user (email+password)
+// 4) Upsert public.users profile with { name/email/company/phone/xero_account_id }
+// 5) Save PIN via RPC (set_user_pin) using the new user's session
+//
+// IMPORTANT:
+// - This function is intended to run with verify_jwt = false.
+// - It uses the service role key only for user creation.
+// - Profile upsert + PIN save are attempted as the newly-created user to respect RLS.
+//
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 
 const CORS_HEADERS: Record<string, string> = {
   "access-control-allow-origin": "*",
@@ -24,15 +24,27 @@ const CORS_HEADERS: Record<string, string> = {
 
 type JsonRecord = Record<string, unknown>;
 
-type UpsertRequestBody = {
-  // Accept both camelCase and snake_case keys.
+type SignupBody = {
+  user_id?: string;
+  userId?: string;
+  userID?: string;
+
+  name?: string;
   fullName?: string;
   full_name?: string;
+
   email?: string;
+
+  company?: string;
   companyName?: string;
   company_name?: string;
+
+  phone?: string;
   phoneNumber?: string;
   phone_number?: string;
+
+  pin?: string;
+  password?: string;
 };
 
 function jsonResponse(status: number, body: JsonRecord) {
@@ -48,330 +60,192 @@ function requireEnv(name: string): string {
   return value;
 }
 
-function safeStr(v: unknown): string {
-  return typeof v === "string" ? v.trim() : "";
+function normalizeEmail(raw: string) {
+  return raw.trim().toLowerCase();
 }
 
-async function readLatestTokenRow(
-  supabaseUrl: string,
-  serviceRole: string,
-): Promise<{ id: string; refreshToken: string; tenantIdFromDb: string | null }> {
-  const res = await fetch(
-    `${supabaseUrl}/rest/v1/xero_tokens?select=id,refresh_token,tenant_id,created_at&order=created_at.desc&limit=1`,
-    {
-      method: "GET",
-      headers: { apikey: serviceRole, authorization: `Bearer ${serviceRole}` },
-    },
-  );
-
-  if (!res.ok) throw new Error(`Failed to read xero_tokens row from Supabase: ${res.status} :: ${await res.text()}`);
-
-  const json = (await res.json()) as Array<{ id?: string; refresh_token?: string; tenant_id?: string }>;
-  const row = json?.[0];
-  const id = safeStr(row?.id);
-  const refreshToken = safeStr(row?.refresh_token);
-  if (!id || !refreshToken) throw new Error("No valid row found in public.xero_tokens for this request.");
-
-  const tenantIdFromDb = safeStr(row?.tenant_id) || null;
-  return { id, refreshToken, tenantIdFromDb };
+function pickFirstString(...values: unknown[]): string {
+  for (const v of values) {
+    if (typeof v === "string") {
+      const s = v.trim();
+      if (s) return s;
+    }
+  }
+  return "";
 }
 
-async function rotateTokensInDb(
-  supabaseUrl: string,
-  serviceRole: string,
-  tokenRowId: string,
-  patch: { access_token?: string; refresh_token?: string; expires_at?: string },
-) {
-  const res = await fetch(`${supabaseUrl}/rest/v1/xero_tokens?id=eq.${encodeURIComponent(tokenRowId)}`, {
-    method: "PATCH",
-    headers: {
-      apikey: serviceRole,
-      authorization: `Bearer ${serviceRole}`,
-      "content-type": "application/json",
-      Prefer: "return=minimal",
-    },
-    body: JSON.stringify({ ...patch, updated_at: new Date().toISOString() }),
-  });
-
-  if (!res.ok) throw new Error(`Failed to update xero_tokens in Supabase: ${res.status} :: ${await res.text()}`);
+function validatePin(pin: string) {
+  const p = pin.trim();
+  if (p.length < 4) throw new Error("pin must be at least 4 digits");
+  if (!/^\d+$/.test(p)) throw new Error("pin must be numeric");
+  return p;
 }
 
-function normalizeEmail(email: string) {
-  return email.trim().toLowerCase();
+function validatePassword(password: string) {
+  const p = password.trim();
+  if (p.length < 6) throw new Error("password must be at least 6 characters");
+  return p;
 }
 
-function splitName(fullName: string): { firstName: string; lastName: string } {
-  const cleaned = fullName.trim().replace(/\s+/g, " ");
-  if (!cleaned) return { firstName: "", lastName: "" };
-  const parts = cleaned.split(" ");
-  if (parts.length === 1) return { firstName: parts[0], lastName: "" };
-  return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
-}
-
-function escapeXeroWhereString(value: string) {
-  // Xero where clause uses double-quotes around string; inside, escape backslash and quotes.
-  return value.replace(/\\/g, "\\\\").replace(/\"/g, "\\\"");
-}
-
-function base64UrlToBase64(input: string) {
-  const base64 = input.replace(/-/g, "+").replace(/_/g, "/");
-  const pad = base64.length % 4;
-  if (pad === 0) return base64;
-  if (pad === 2) return base64 + "==";
-  if (pad === 3) return base64 + "=";
-  // If it's 1, it's invalid base64url
-  return base64;
-}
-
-function decodeJwtPayloadSub(jwt: string): string | null {
+function safeParseJson(text: string): unknown {
   try {
-    const parts = jwt.split(".");
-    if (parts.length < 2) return null;
-    const payloadB64 = base64UrlToBase64(parts[1]);
-    const payloadJson = JSON.parse(atob(payloadB64));
-    return typeof payloadJson?.sub === "string" ? payloadJson.sub : null;
+    return text ? JSON.parse(text) : null;
   } catch {
     return null;
   }
 }
 
-async function xeroFetchJson(url: string, init: RequestInit) {
-  const res = await fetch(url, init);
-  const text = await res.text();
-  let json: unknown = null;
-  try {
-    json = text ? JSON.parse(text) : null;
-  } catch {
-    json = { raw: text };
-  }
+async function callMakeHook(params: { name: string; email: string; company: string; phone: string }): Promise<string> {
+  // Default to the user-provided Make.com hook base URL (without query params).
+  const base =
+    Deno.env.get("MAKE_HOOK_BASE_URL") ??
+    "https://hook.eu1.make.com/jyjva8k9i6avqx011y3kcqf5jksrwd34";
+
+  const url = new URL(base);
+  url.searchParams.set("name", params.name);
+  url.searchParams.set("email", params.email);
+  url.searchParams.set("company", params.company);
+  url.searchParams.set("phone", params.phone);
+
+  const res = await fetch(url.toString(), { method: "GET" });
+  const text = (await res.text()).trim();
 
   if (!res.ok) {
-    throw new Error(
-      `Xero API error ${res.status} ${res.statusText} for ${url} :: ${JSON.stringify(json)}`,
-    );
+    // Avoid echoing PII; include only status and a small snippet.
+    const snippet = text.length > 200 ? text.slice(0, 200) + "..." : text;
+    throw new Error(`make_hook_failed status=${res.status} body=${snippet}`);
   }
-  return json as any;
-}
 
-// NOTE: verify_jwt=false, so callers may not have a JWT.
-// We keep the JWT decoding helper above for potential future use.
+  // Hook may return JSON: { xero_account_id: "..." } or { xeroAccountId: "..." }
+  // or plain text containing the ID.
+  const parsed = safeParseJson(text);
+  if (parsed && typeof parsed === "object") {
+    const m = parsed as Record<string, unknown>;
+    const candidates = [m["xero_account_id"], m["xeroAccountId"], m["contact_id"], m["ContactID"], m["id"]];
+    for (const c of candidates) {
+      if (typeof c === "string" && c.trim()) return c.trim();
+    }
+  }
+
+  if (text && text.length < 200) return text;
+  throw new Error("make_hook_missing_xero_account_id");
+}
 
 serve(async (req) => {
   try {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
-    if (req.method !== "POST") return jsonResponse(405, { error: "method_not_allowed" });
+    if (req.method !== "POST") return jsonResponse(405, { ok: false, error: "method_not_allowed" });
 
     const contentType = req.headers.get("content-type") || "";
     if (!contentType.toLowerCase().includes("application/json")) {
-      return jsonResponse(415, { error: "unsupported_media_type", message: "Use application/json" });
+      return jsonResponse(415, { ok: false, error: "unsupported_media_type", message: "Use application/json" });
     }
 
-    const body = (await req.json()) as UpsertRequestBody;
+    let body: SignupBody = {};
+    try {
+      body = (await req.json()) as SignupBody;
+    } catch {
+      body = {};
+    }
 
-    // verify_jwt=false; tokens are stored globally in public.xero_tokens.
+    const name = pickFirstString(body.name, body.fullName, body.full_name);
+    const existingUserId = pickFirstString(body.user_id, body.userId, body.userID);
+    const emailRaw = pickFirstString(body.email);
+    const company = pickFirstString(body.company, body.companyName, body.company_name);
+    const phone = pickFirstString(body.phone, body.phoneNumber, body.phone_number);
+    const pin = pickFirstString(body.pin);
+    const password = pickFirstString(body.password);
 
-    const fullName = (body.fullName || body.full_name || "").trim();
-    const emailRaw = (body.email || "").trim();
-    const companyName = (body.companyName || body.company_name || "").trim();
-    const phoneNumber = (body.phoneNumber || body.phone_number || "").trim();
-
-    if (!emailRaw) return jsonResponse(400, { error: "invalid_request", message: "email is required" });
+    if (!name) return jsonResponse(400, { ok: false, error: "invalid_request", message: "name is required" });
+    if (!emailRaw) return jsonResponse(400, { ok: false, error: "invalid_request", message: "email is required" });
+    if (!company) return jsonResponse(400, { ok: false, error: "invalid_request", message: "company is required" });
+    if (!phone) return jsonResponse(400, { ok: false, error: "invalid_request", message: "phone is required" });
 
     const email = normalizeEmail(emailRaw);
-    const { firstName, lastName } = splitName(fullName || companyName || email);
+    if (!email.includes("@")) return jsonResponse(400, { ok: false, error: "invalid_email" });
 
-    const clientId = requireEnv("XERO_CLIENT_ID");
-    const clientSecret = requireEnv("XERO_CLIENT_SECRET");
-    const tenantIdEnv = safeStr(Deno.env.get("XERO_TENANT_ID"));
+    const pinValidated = validatePin(pin);
+    const passwordValidated = validatePassword(password);
 
-    // Supabase DB connection for token storage
     const supabaseUrl = requireEnv("SUPABASE_URL");
+    const anonKey = requireEnv("SUPABASE_ANON_KEY");
     const serviceRole = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
 
-    // 1) Read refresh token from Postgres
-    const latest = await readLatestTokenRow(supabaseUrl, serviceRole);
-    const refreshToken = latest.refreshToken;
+    // A) Call Make webhook first, so we don't create a Supabase user if Xero fails.
+    const xeroAccountId = await callMakeHook({ name, email, company, phone });
 
-    // Prefer DB tenant_id; allow env override for backwards compatibility.
-    const tenantId = tenantIdEnv || latest.tenantIdFromDb;
-    if (!tenantId) {
-      throw new Error("Missing tenant_id. Set XERO_TENANT_ID secret or store tenant_id in public.xero_tokens.");
-    }
-
-    // 2) Refresh token -> access token (and rotate refresh token)
-    const basic = btoa(`${clientId}:${clientSecret}`);
-
-    const tokenRes = await fetch("https://identity.xero.com/connect/token", {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${basic}`,
-        "content-type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken }),
+    // B) Create auth user via service role (admin).
+    const admin = createClient(supabaseUrl, serviceRole, {
+      auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    const tokenText = await tokenRes.text();
-    let tokenData: any = null;
-    try {
-      tokenData = tokenText ? JSON.parse(tokenText) : null;
-    } catch {
-      tokenData = { raw: tokenText };
-    }
-
-    if (!tokenRes.ok) {
-      throw new Error(`Xero token refresh failed: ${tokenRes.status} :: ${JSON.stringify(tokenData)}`);
-    }
-
-    const accessToken: string | undefined = tokenData?.access_token;
-    const rotatedRefreshToken: string | undefined = tokenData?.refresh_token;
-    if (!accessToken) throw new Error(`Missing access_token in refresh response: ${JSON.stringify(tokenData)}`);
-
-    const patch: { access_token?: string; refresh_token?: string; expires_at?: string } = { access_token: accessToken };
-    if (rotatedRefreshToken && rotatedRefreshToken !== refreshToken) patch.refresh_token = rotatedRefreshToken;
-    await rotateTokensInDb(supabaseUrl, serviceRole, latest.id, patch);
-
-    const xeroHeaders = {
-      Authorization: `Bearer ${accessToken}`,
-      "Xero-tenant-id": tenantId,
-      "content-type": "application/json",
-      Accept: "application/json",
-    };
-
-    // 3) Find contact by EmailAddress across ALL contacts (not only customers)
-    const where = `EmailAddress=="${escapeXeroWhereString(email)}"`;
-    const findUrl = `https://api.xero.com/api.xro/2.0/Contacts?where=${encodeURIComponent(where)}`;
-
-    const findJson = await xeroFetchJson(findUrl, { method: "GET", headers: xeroHeaders });
-    const contacts: any[] = Array.isArray(findJson?.Contacts) ? findJson.Contacts : [];
-
-    const existing = contacts.find((c) =>
-      typeof c?.EmailAddress === "string" && normalizeEmail(c.EmailAddress) === email
-    );
-
-    // 4) Update or create contact as customer
-    const desiredName = (companyName || fullName || email).trim();
-    const phonePayload = phoneNumber ? [{ PhoneType: "MOBILE", PhoneNumber: phoneNumber }] : undefined;
-
-    let contactId: string;
-  let createdNew = false;
-
-    if (existing?.ContactID) {
-      const updateBody: any = {
-        Contacts: [
-          {
-            ContactID: existing.ContactID,
-            Name: desiredName,
-            FirstName: firstName,
-            LastName: lastName,
-            EmailAddress: email,
-            // NOTE: Xero's IsCustomer/IsSupplier fields are frequently treated as
-            // computed/read-only by the API and may remain false until a sales
-            // transaction exists. We still send it for forward-compat.
-            IsCustomer: true,
-            IsSupplier: false,
-            ContactStatus: "ACTIVE",
-          },
-        ],
-      };
-      if (phonePayload) updateBody.Contacts[0].Phones = phonePayload;
-
-      const updateRes = await xeroFetchJson("https://api.xero.com/api.xro/2.0/Contacts", {
-        method: "POST",
-        headers: xeroHeaders,
-        body: JSON.stringify(updateBody),
+    // If the client already created an Auth user via OTP (common when using
+    // signInWithOtp(shouldCreateUser: true)), we'll receive the user id and we
+    // should *update* that user with a password rather than trying to create
+    // a new one.
+    let userId = existingUserId;
+    if (userId) {
+      const { error: updateErr } = await admin.auth.admin.updateUserById(userId, {
+        password: passwordValidated,
+        email_confirm: true,
+        user_metadata: { display_name: name },
       });
-
-      const updated = Array.isArray(updateRes?.Contacts) ? updateRes.Contacts[0] : null;
-      contactId = updated?.ContactID || existing.ContactID;
+      if (updateErr) return jsonResponse(500, { ok: false, error: "auth_update_failed", message: updateErr.message });
     } else {
-      const createBody: any = {
-        Contacts: [
-          {
-            Name: desiredName,
-            FirstName: firstName,
-            LastName: lastName,
-            EmailAddress: email,
-            IsCustomer: true,
-            IsSupplier: false,
-            ContactStatus: "ACTIVE",
-          },
-        ],
-      };
-      if (phonePayload) createBody.Contacts[0].Phones = phonePayload;
+      const { data: created, error: createErr } = await admin.auth.admin.createUser({
+        email,
+        password: passwordValidated,
+        email_confirm: true,
+        user_metadata: { display_name: name },
+      });
+      if (createErr) return jsonResponse(409, { ok: false, error: "auth_create_failed", message: createErr.message });
+      userId = created?.user?.id ?? "";
+      if (!userId) throw new Error("auth_create_missing_user_id");
+    }
 
-      const createdRes = await xeroFetchJson("https://api.xero.com/api.xro/2.0/Contacts", {
-        method: "POST",
-        headers: xeroHeaders,
-        body: JSON.stringify(createBody),
+    // C) Sign in as the newly-created user (anon client) to upsert profile and set PIN via RPC.
+    const client = createClient(supabaseUrl, anonKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    const { data: signInData, error: signInErr } = await client.auth.signInWithPassword({ email, password: passwordValidated });
+    if (signInErr) {
+      // We still created the auth user; caller can log in later.
+      return jsonResponse(500, { ok: false, error: "signin_failed", message: signInErr.message, user_id: userId, xero_account_id: xeroAccountId });
+    }
+
+    // D) Upsert public.users profile (as the user, so RLS can enforce ownership).
+    const now = new Date().toISOString();
+    const { error: upsertErr } = await client
+      .from("users")
+      .upsert({
+        id: userId,
+        email,
+        display_name: name,
+        company_name: company,
+        phone_number: phone,
+        xero_account_id: xeroAccountId,
+        updated_at: now,
       });
 
-      const created = Array.isArray(createdRes?.Contacts) ? createdRes.Contacts[0] : null;
-      contactId = created?.ContactID;
-      if (!contactId) throw new Error(`Xero create did not return ContactID: ${JSON.stringify(createdRes)}`);
-      createdNew = true;
-    }
+    // E) Save PIN (as the user) via RPC.
+    const { error: pinErr } = await client.rpc("set_user_pin", { pin_input: pinValidated });
 
-    // 5) (Optional) Force the contact to appear as a "Customer" in Xero.
-    // In many Xero orgs, `IsCustomer` stays `false` until the contact is used on
-    // a sales transaction (e.g., an ACCREC invoice). If you want that behavior,
-    // set these Edge Function secrets:
-    // - CREATE_DRAFT_SALES_INVOICE_ON_CONTACT_CREATE=true
-    // - XERO_SALES_ACCOUNT_CODE=<a valid revenue account code in your org>
-    // This will create a $0 draft invoice (if your org allows it).
-    const shouldCreateDraftInvoice = (Deno.env.get("CREATE_DRAFT_SALES_INVOICE_ON_CONTACT_CREATE") || "").toLowerCase() === "true";
-    const salesAccountCode = (Deno.env.get("XERO_SALES_ACCOUNT_CODE") || "").trim();
-
-    let draftInvoiceId: string | undefined;
-    if (createdNew && shouldCreateDraftInvoice) {
-      if (!salesAccountCode) {
-        console.warn("CREATE_DRAFT_SALES_INVOICE_ON_CONTACT_CREATE is true but XERO_SALES_ACCOUNT_CODE is not set; skipping invoice creation.");
-      } else {
-        try {
-          const today = new Date().toISOString().slice(0, 10);
-          const invoiceBody: any = {
-            Invoices: [
-              {
-                Type: "ACCREC",
-                Contact: { ContactID: contactId },
-                Date: today,
-                DueDate: today,
-                Status: "DRAFT",
-                LineItems: [
-                  {
-                    Description: "Trade account created",
-                    Quantity: 1,
-                    UnitAmount: 0,
-                    AccountCode: salesAccountCode,
-                  },
-                ],
-              },
-            ],
-          };
-
-          const invoiceRes = await xeroFetchJson("https://api.xero.com/api.xro/2.0/Invoices", {
-            method: "POST",
-            headers: xeroHeaders,
-            body: JSON.stringify(invoiceBody),
-          });
-
-          const createdInvoice = Array.isArray(invoiceRes?.Invoices) ? invoiceRes.Invoices[0] : null;
-          draftInvoiceId = createdInvoice?.InvoiceID;
-        } catch (e) {
-          // Don't fail signup if invoice creation isn't allowed/configured.
-          console.warn(`Failed to create draft invoice to force IsCustomer=true: ${String(e)}`);
-        }
-      }
-    }
+    const ok = !upsertErr && !pinErr;
 
     return jsonResponse(200, {
-      ok: true,
-      contactId,
-      updated: Boolean(existing?.ContactID),
-      // Helpful for debugging Xero-side behavior; client can ignore.
-      draftInvoiceId,
+      ok,
+      user_id: userId,
+      xero_account_id: xeroAccountId,
+      profile_saved: !upsertErr,
+      pin_saved: !pinErr,
+      // For debugging only; messages are safe-ish, but still avoid echoing user input.
+      profile_error: upsertErr?.message ?? null,
+      pin_error: pinErr?.message ?? null,
     });
   } catch (e) {
-    console.error(`xero_upsert_contact_cc failed: ${String(e)}`);
-    return jsonResponse(500, { ok: false, error: "internal_error", message: String(e) });
+    const message = e instanceof Error ? e.message : String(e);
+    console.error(`xero_upsert_contact_cc failed: ${message}`);
+    return jsonResponse(500, { ok: false, error: "unhandled_exception", message });
   }
 });

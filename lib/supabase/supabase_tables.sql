@@ -111,7 +111,9 @@ create table if not exists public.xero_products (
   xero_item_id text primary key,
   code text null,
   name text null,
-  sale_price_cents integer null,
+  -- Note: despite the "_cents" suffix, this is now stored as a dollar amount
+  -- (e.g. 91.0 for $91) and may include decimals.
+  sale_price_cents double precision null,
   sales_account text null,
   tax_rate text null,
   description text null,

@@ -79,14 +79,7 @@ class _RegisterPageState extends State<RegisterPage> {
       if (displayName.trim().isEmpty) throw Exception('Please enter your full name.');
       if (normalizedEmail.isEmpty || !normalizedEmail.contains('@')) throw Exception('Please enter a valid email.');
 
-      final exists = await widget.appState.auth.emailExists(email: normalizedEmail);
-      if (exists) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Email is already exist')));
-        return;
-      }
-
-      await widget.appState.auth.requestSignupEmailCode(email: normalizedEmail, displayName: displayName);
+      await widget.appState.auth.requestSignupEmailCode(email: normalizedEmail);
       if (!mounted) return;
       _codeSentAt = DateTime.now();
       _startCooldown();

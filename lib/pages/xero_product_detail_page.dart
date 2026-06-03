@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/components/app_header.dart';
 import 'package:pwa/models/xero_product.dart';
+import 'package:pwa/services/cart_service.dart';
 import 'package:pwa/services/xero_product_service.dart';
 import 'package:pwa/theme.dart';
 
@@ -105,21 +106,23 @@ class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
                               const SizedBox(height: AppSpacing.xl),
                               Text(
                                 p.name,
-                                style: Theme.of(context).textTheme.headlineLarge?.semiBold,
+                                style: Theme.of(context).textTheme.titleLarge?.semiBold.copyWith(
+                                  fontSize: 30,
+                                ),
                                 maxLines: 3,
                                 overflow: TextOverflow.ellipsis,
                               ),
                               const SizedBox(height: AppSpacing.sm),
                               Text(
                                 p.code == null || p.code!.isEmpty ? 'SKU: —' : 'SKU: ${p.code}',
-                                style: Theme.of(context).textTheme.titleMedium?.withColor(cs.onSurfaceVariant),
+                                style: Theme.of(context).textTheme.titleLarge?.semiBold,
                               ),
                               const SizedBox(height: AppSpacing.xl),
-                              Text('Price: $priceText', style: Theme.of(context).textTheme.displaySmall?.semiBold),
+                              Text('Price: $priceText', style: Theme.of(context).textTheme.titleLarge?.semiBold),
                               const SizedBox(height: AppSpacing.sm),
                               Text(
                                 'Amount: ${(p.salesAccount ?? '').trim().isEmpty ? 'Standard Retail Price' : (p.salesAccount ?? 'Standard Retail Price')}',
-                                style: Theme.of(context).textTheme.titleMedium?.withColor(cs.onSurfaceVariant),
+                                style: Theme.of(context).textTheme.titleLarge?.semiBold,
                               ),
                               const SizedBox(height: AppSpacing.xl),
                               Row(
@@ -151,8 +154,7 @@ class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
                               : () async {
                                   setState(() => _isAdding = true);
                                   try {
-                                    // TODO: Wire into real cart/invoice state.
-                                    // For now we just confirm and return to the list.
+                                     await CartService.upsertXeroProduct(product: p, quantity: _quantity);
                                     if (!context.mounted) return;
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(content: Text('Added "${p.name}" × $_quantity')),
