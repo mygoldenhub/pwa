@@ -184,7 +184,7 @@ class _LoginMethodPicker extends StatelessWidget {
           child: _ModeTile(
             selected: method == _LoginMethod.pin,
             title: 'PIN',
-            subtitle: 'Quick unlock with your\n4-digit PIN.',
+            subtitle: 'Quick unlock',
             onTap: onChanged == null ? null : () => onChanged!(_LoginMethod.pin),
           ),
         ),
@@ -193,7 +193,7 @@ class _LoginMethodPicker extends StatelessWidget {
           child: _ModeTile(
             selected: method == _LoginMethod.password,
             title: 'Password',
-            subtitle: 'Full sign-in with your\npassword.',
+            subtitle: 'Full sign-in',
             onTap: onChanged == null ? null : () => onChanged!(_LoginMethod.password),
           ),
         ),
@@ -279,26 +279,29 @@ class _ModeTileState extends State<_ModeTile> {
               duration: const Duration(milliseconds: 180),
               curve: Curves.easeOutCubic,
               offset: hovered ? const Offset(0, -0.015) : Offset.zero,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(child: Text(widget.title, style: titleStyle)),
-                      const SizedBox(width: AppSpacing.sm),
-                      AnimatedOpacity(
-                        duration: const Duration(milliseconds: 180),
-                        curve: Curves.easeOutCubic,
-                        opacity: selected ? 1 : 0,
-                        child: Icon(Icons.check_circle, color: cs.primary, size: 18),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text(widget.subtitle, style: subtitleStyle, maxLines: 2, overflow: TextOverflow.clip),
-                ],
-              ),
+               child: Stack(
+                 children: [
+                   Column(
+                     crossAxisAlignment: CrossAxisAlignment.start,
+                     mainAxisAlignment: MainAxisAlignment.center,
+                     children: [
+                       Text(widget.title, style: titleStyle),
+                       const SizedBox(height: 6),
+                       Text(widget.subtitle, style: subtitleStyle, maxLines: 2, overflow: TextOverflow.clip),
+                     ],
+                   ),
+                   Positioned(
+                     right: 0,
+                     bottom: 0,
+                     child: AnimatedOpacity(
+                       duration: const Duration(milliseconds: 180),
+                       curve: Curves.easeOutCubic,
+                       opacity: selected ? 1 : 0,
+                       child: Icon(Icons.check_circle, color: cs.primary, size: 18),
+                     ),
+                   ),
+                 ],
+               ),
             ),
           ),
         ),
@@ -306,4 +309,5 @@ class _ModeTileState extends State<_ModeTile> {
     );
   }
 }
+
 
