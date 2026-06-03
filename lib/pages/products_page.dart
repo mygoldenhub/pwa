@@ -21,26 +21,45 @@ class ProductsPage extends StatefulWidget {
 
 enum _ScanChoice { barcode, productName }
 
-/// Wraps a bottom-sheet child so it sits above the app shell bottom bar while
-/// keeping that bar visible.
+/// Shared “modal” surface used by overlays in this page.
 ///
-/// This is needed when `showModalBottomSheet` is presented within a nested
-/// navigator (e.g. an `AppShellPage` with a bottom navigation bar).
-class BottomSheetAboveNavBar extends StatelessWidget {
+/// We use a center-screen dialog presentation (not a bottom-sheet) so:
+/// - it appears in the middle of the screen
+/// - there is no drag handle (“------”) at the top
+/// - it behaves consistently across mobile/web
+class AppModalSurface extends StatelessWidget {
   final Widget child;
-  const BottomSheetAboveNavBar({super.key, required this.child});
+  final EdgeInsetsGeometry padding;
+  final BorderRadiusGeometry borderRadius;
+  const AppModalSurface({super.key, required this.child, this.padding = const EdgeInsets.all(AppSpacing.lg), this.borderRadius = const BorderRadius.all(Radius.circular(AppRadius.xl))});
 
   @override
   Widget build(BuildContext context) {
-    final mq = MediaQuery.of(context);
-    final bottomPadding = mq.padding.bottom + kBottomNavigationBarHeight;
+    final cs = Theme.of(context).colorScheme;
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560),
+        child: Material(
+          color: cs.surface,
+          clipBehavior: Clip.antiAlias,
+          shape: RoundedRectangleBorder(borderRadius: borderRadius),
+          child: Padding(padding: padding, child: child),
+        ),
+      ),
+    );
+  }
+}
 
-    // Also react to the keyboard so fields remain visible when the sheet is
-    // scroll-controlled.
-    return AnimatedPadding(
-      duration: const Duration(milliseconds: 180),
-      curve: Curves.easeOut,
-      padding: EdgeInsets.only(bottom: bottomPadding + mq.viewInsets.bottom),
+class AppCenteredModalDialog extends StatelessWidget {
+  final Widget child;
+  const AppCenteredModalDialog({super.key, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      insetPadding: const EdgeInsets.all(AppSpacing.lg),
       child: child,
     );
   }
@@ -52,31 +71,27 @@ class _ScanChoiceSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Padding(
-      padding: AppSpacing.paddingLg,
+    return AppModalSurface(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('Add item', style: Theme.of(context).textTheme.titleLarge?.semiBold),
           const SizedBox(height: AppSpacing.xs),
-          Text(
-            'Choose how you want to add an item.',
-            style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
-          ),
+          Text('Choose how you want to add an item.', style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant)),
           const SizedBox(height: AppSpacing.lg),
           _ScanChoiceTile(
             icon: Icons.qr_code_scanner,
             title: 'Barcode mode',
             subtitle: 'Use your camera to scan a barcode.',
-            onTap: () => context.pop(_ScanChoice.barcode),
+            onTap: () => Navigator.of(context).pop(_ScanChoice.barcode),
           ),
           const SizedBox(height: AppSpacing.md),
           _ScanChoiceTile(
             icon: Icons.text_fields,
             title: 'Product name mode',
             subtitle: 'Enter the item name manually.',
-            onTap: () => context.pop(_ScanChoice.productName),
+            onTap: () => Navigator.of(context).pop(_ScanChoice.productName),
           ),
           const SizedBox(height: AppSpacing.md),
         ],
@@ -107,6 +122,7 @@ class _ScanChoiceTileState extends State<_ScanChoiceTile> {
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
         onTap: widget.onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 140),
@@ -249,31 +265,24 @@ class _ProductsPageState extends State<ProductsPage> {
   }
 
   Future<void> _openViaProductName() async {
-    final selected = await showModalBottomSheet<XeroProduct>(
+    final cs = Theme.of(context).colorScheme;
+    final selected = await showDialog<XeroProduct>(
       context: context,
-      // Keep the app shell bottom bar visible. We instead pad the sheet so its
-      // content sits *above* the bottom bar.
-      useRootNavigator: false,
-      useSafeArea: true,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (context) => BottomSheetAboveNavBar(
-        child: _XeroProductNamePickerSheet(initialQuery: _query.trim()),
-      ),
+      barrierDismissible: true,
+      barrierColor: cs.scrim.withValues(alpha: 0.52),
+      builder: (context) => AppCenteredModalDialog(child: _XeroProductNamePickerSheet(initialQuery: _query.trim())),
     );
     if (!mounted || selected == null) return;
     context.push(AppRoutes.xeroProduct(selected.xeroItemId));
   }
 
   Future<void> _openScanChooser() async {
-    final choice = await showModalBottomSheet<_ScanChoice>(
+    final cs = Theme.of(context).colorScheme;
+    final choice = await showDialog<_ScanChoice>(
       context: context,
-      // Keep the app shell bottom bar visible. We instead pad the sheet so its
-      // content sits *above* the bottom bar.
-      useRootNavigator: false,
-      useSafeArea: true,
-      showDragHandle: true,
-      builder: (context) => const BottomSheetAboveNavBar(child: _ScanChoiceSheet()),
+      barrierDismissible: true,
+      barrierColor: cs.scrim.withValues(alpha: 0.52),
+      builder: (context) => const AppCenteredModalDialog(child: _ScanChoiceSheet()),
     );
 
     if (!mounted || choice == null) return;
@@ -927,24 +936,35 @@ class _XeroProductNamePickerSheetState extends State<_XeroProductNamePickerSheet
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    // Give the sheet a predictable height so the results list has room to
-    // scroll (instead of the sheet sizing itself to content).
-    final sheetHeight = MediaQuery.sizeOf(context).height * 0.72;
+    // Give the dialog a predictable height so the results list has room to
+    // scroll (instead of sizing itself to content).
+    //
+    // On small mobile screens, the keyboard can cover the lower part of the
+    // dialog. Use the *available* height (minus viewInsets) so the list remains
+    // reachable and scroll gestures work as expected.
+    final screenH = MediaQuery.sizeOf(context).height;
+    final viewInsets = MediaQuery.viewInsetsOf(context);
+    final availableH = (screenH - viewInsets.bottom).clamp(0.0, screenH);
+    final dialogHeight = (availableH * 0.78).clamp(360.0, screenH * 0.82);
 
     return SizedBox(
-      height: sheetHeight,
-      child: Padding(
-        // Note: keyboard + bottom bar padding is handled by BottomSheetAboveNavBar.
+      height: dialogHeight,
+      child: AppModalSurface(
         padding: const EdgeInsets.only(left: AppSpacing.lg, right: AppSpacing.lg, bottom: AppSpacing.lg, top: AppSpacing.md),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Product name', style: Theme.of(context).textTheme.titleLarge?.semiBold),
-            const SizedBox(height: AppSpacing.xs),
-            Text(
-              'Start typing to search products synced from Xero.',
-              style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
+            Row(
+              children: [
+                Expanded(child: Text('Product name', style: Theme.of(context).textTheme.titleLarge?.semiBold)),
+                IconButton(
+                  tooltip: 'Close',
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: Icon(Icons.close, color: cs.onSurfaceVariant),
+                ),
+              ],
             ),
+            Text('Start typing to search products synced from Xero.', style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant)),
             const SizedBox(height: AppSpacing.lg),
             TextField(
               controller: _controller,
@@ -993,14 +1013,14 @@ class _XeroProductNamePickerSheetState extends State<_XeroProductNamePickerSheet
                         : ListView.separated(
                             key: const ValueKey('results'),
                             padding: EdgeInsets.zero,
+                            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                             primary: false,
+                            physics: const BouncingScrollPhysics(),
                             itemCount: _results.length,
                             separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm),
                             itemBuilder: (context, index) {
                               final p = _results[index];
-                              return _XeroProductSuggestionTile(
-                                product: p,
-                                onTap: () => context.pop(p),
-                              );
+                              return _XeroProductSuggestionTile(product: p, onTap: () => Navigator.of(context).pop(p));
                             },
                           ),
               ),
