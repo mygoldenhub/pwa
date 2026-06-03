@@ -131,7 +131,9 @@ class _LoginPageState extends State<LoginPage> {
 
           const SizedBox(height: AppSpacing.lg),
 
-          _LoginMethodPicker(
+          _OrDivider(),
+          const SizedBox(height: AppSpacing.md),
+          _LoginMethodIconPicker(
             method: _method,
             onChanged: isBusy
                 ? null
@@ -142,6 +144,12 @@ class _LoginPageState extends State<LoginPage> {
                       _pinController.clear();
                     });
                   },
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            _method == _LoginMethod.pin ? 'Quick unlock with your PIN' : 'Full sign-in with your password',
+            style: Theme.of(context).textTheme.bodySmall?.withColor(cs.onSurfaceVariant),
+            textAlign: TextAlign.center,
           ),
           const SizedBox(height: AppSpacing.md),
           SizedBox(
@@ -170,139 +178,118 @@ class _LoginPageState extends State<LoginPage> {
   }
 }
 
-class _LoginMethodPicker extends StatelessWidget {
+class _OrDivider extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final textStyle = Theme.of(context).textTheme.labelMedium?.withColor(cs.onSurfaceVariant);
+
+    return Row(
+      children: [
+        Expanded(child: Divider(height: 1, thickness: 1, color: cs.outlineVariant.withValues(alpha: 0.5))),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+          child: Text('or', style: textStyle),
+        ),
+        Expanded(child: Divider(height: 1, thickness: 1, color: cs.outlineVariant.withValues(alpha: 0.5))),
+      ],
+    );
+  }
+}
+
+class _LoginMethodIconPicker extends StatelessWidget {
   final _LoginMethod method;
   final ValueChanged<_LoginMethod>? onChanged;
 
-  const _LoginMethodPicker({required this.method, required this.onChanged});
+  const _LoginMethodIconPicker({required this.method, required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
     return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Expanded(
-          child: _ModeTile(
-            selected: method == _LoginMethod.pin,
-            title: 'PIN',
-            subtitle: 'Quick unlock',
-            onTap: onChanged == null ? null : () => onChanged!(_LoginMethod.pin),
-          ),
+        _LoginMethodIconButton(
+          selected: method == _LoginMethod.pin,
+          enabled: onChanged != null,
+          icon: Icons.pin_outlined,
+          semanticsLabel: 'PIN login',
+          onTap: onChanged == null ? null : () => onChanged!(_LoginMethod.pin),
         ),
-        const SizedBox(width: AppSpacing.sm),
-        Expanded(
-          child: _ModeTile(
-            selected: method == _LoginMethod.password,
-            title: 'Password',
-            subtitle: 'Full sign-in',
-            onTap: onChanged == null ? null : () => onChanged!(_LoginMethod.password),
-          ),
+        const SizedBox(width: AppSpacing.lg),
+        _LoginMethodIconButton(
+          selected: method == _LoginMethod.password,
+          enabled: onChanged != null,
+          icon: Icons.password,
+          semanticsLabel: 'Password login',
+          onTap: onChanged == null ? null : () => onChanged!(_LoginMethod.password),
         ),
       ],
     );
   }
 }
 
-class _ModeTile extends StatefulWidget {
+class _LoginMethodIconButton extends StatelessWidget {
   final bool selected;
-  final String title;
-  final String subtitle;
+  final bool enabled;
+  final IconData icon;
+  final String semanticsLabel;
   final VoidCallback? onTap;
 
-  const _ModeTile({
+  const _LoginMethodIconButton({
     required this.selected,
-    required this.title,
-    required this.subtitle,
+    required this.enabled,
+    required this.icon,
+    required this.semanticsLabel,
     required this.onTap,
   });
 
   @override
-  State<_ModeTile> createState() => _ModeTileState();
-}
-
-class _ModeTileState extends State<_ModeTile> {
-  bool _hovered = false;
-
-  @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-
-    final bool selected = widget.selected;
-    final bool enabled = widget.onTap != null;
-    final bool hovered = enabled && _hovered;
 
     final bg = selected ? cs.primaryContainer : cs.surface;
     final borderColor = selected ? cs.primary : cs.outlineVariant.withValues(alpha: 0.45);
     final borderWidth = selected ? 2.0 : 1.0;
-    final titleStyle = textTheme.titleMedium?.copyWith(
-      color: selected ? cs.onPrimaryContainer : cs.onSurface,
-      fontWeight: FontWeight.w700,
-      letterSpacing: 0.2,
-    );
-    final subtitleStyle = textTheme.bodySmall?.copyWith(
-      color: (selected ? cs.onPrimaryContainer : cs.onSurfaceVariant).withValues(alpha: 0.9),
-      height: 1.35,
-    );
+    final iconColor = selected ? cs.primary : cs.onSurfaceVariant;
 
-    final shadowColor = cs.shadow.withValues(alpha: selected ? 0.14 : 0.10);
+    final shadowColor = cs.shadow.withValues(alpha: selected ? 0.12 : 0.08);
     final boxShadow = <BoxShadow>[
-      BoxShadow(
-        color: shadowColor,
-        blurRadius: selected ? 18 : 14,
-        offset: Offset(0, selected ? 10 : 8),
-      ),
+      BoxShadow(color: shadowColor, blurRadius: selected ? 16 : 12, offset: Offset(0, selected ? 10 : 8)),
     ];
 
     return Semantics(
       button: true,
       selected: selected,
-      label: '${widget.title} mode',
-      child: MouseRegion(
-        cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
-        child: GestureDetector(
-          onTap: widget.onTap,
-          behavior: HitTestBehavior.opaque,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOutCubic,
-            height: 108,
-            padding: const EdgeInsets.all(AppSpacing.md),
-            decoration: BoxDecoration(
-              color: bg,
-              borderRadius: BorderRadius.circular(AppRadius.xl),
-              border: Border.all(color: borderColor, width: borderWidth),
-              boxShadow: enabled ? boxShadow : null,
-            ),
-            child: AnimatedSlide(
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOutCubic,
-              offset: hovered ? const Offset(0, -0.015) : Offset.zero,
-               child: Stack(
-                 children: [
-                   Column(
-                     crossAxisAlignment: CrossAxisAlignment.start,
-                     mainAxisAlignment: MainAxisAlignment.center,
-                     children: [
-                       Text(widget.title, style: titleStyle),
-                       const SizedBox(height: 6),
-                       Text(widget.subtitle, style: subtitleStyle, maxLines: 2, overflow: TextOverflow.clip),
-                     ],
-                   ),
-                   Positioned(
-                     right: 0,
-                     bottom: 0,
-                     child: AnimatedOpacity(
-                       duration: const Duration(milliseconds: 180),
-                       curve: Curves.easeOutCubic,
-                       opacity: selected ? 1 : 0,
-                       child: Icon(Icons.check_circle, color: cs.primary, size: 18),
-                     ),
-                   ),
-                 ],
-               ),
-            ),
+      enabled: enabled,
+      label: semanticsLabel,
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          height: 54,
+          width: 54,
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: borderColor, width: borderWidth),
+            boxShadow: enabled ? boxShadow : null,
+          ),
+          child: Stack(
+            children: [
+              Center(child: Icon(icon, color: iconColor, size: 22)),
+              Positioned(
+                right: 6,
+                bottom: 6,
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOutCubic,
+                  opacity: selected ? 1 : 0,
+                  child: Icon(Icons.check_circle, color: cs.primary, size: 16),
+                ),
+              ),
+            ],
           ),
         ),
       ),

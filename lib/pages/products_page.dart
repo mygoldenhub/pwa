@@ -21,6 +21,31 @@ class ProductsPage extends StatefulWidget {
 
 enum _ScanChoice { barcode, productName }
 
+/// Wraps a bottom-sheet child so it sits above the app shell bottom bar while
+/// keeping that bar visible.
+///
+/// This is needed when `showModalBottomSheet` is presented within a nested
+/// navigator (e.g. an `AppShellPage` with a bottom navigation bar).
+class BottomSheetAboveNavBar extends StatelessWidget {
+  final Widget child;
+  const BottomSheetAboveNavBar({super.key, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    final bottomPadding = mq.padding.bottom + kBottomNavigationBarHeight;
+
+    // Also react to the keyboard so fields remain visible when the sheet is
+    // scroll-controlled.
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+      padding: EdgeInsets.only(bottom: bottomPadding + mq.viewInsets.bottom),
+      child: child,
+    );
+  }
+}
+
 class _ScanChoiceSheet extends StatelessWidget {
   const _ScanChoiceSheet();
 
@@ -226,9 +251,15 @@ class _ProductsPageState extends State<ProductsPage> {
   Future<void> _openViaProductName() async {
     final selected = await showModalBottomSheet<XeroProduct>(
       context: context,
+      // Keep the app shell bottom bar visible. We instead pad the sheet so its
+      // content sits *above* the bottom bar.
+      useRootNavigator: false,
+      useSafeArea: true,
       showDragHandle: true,
       isScrollControlled: true,
-      builder: (context) => _XeroProductNamePickerSheet(initialQuery: _query.trim()),
+      builder: (context) => BottomSheetAboveNavBar(
+        child: _XeroProductNamePickerSheet(initialQuery: _query.trim()),
+      ),
     );
     if (!mounted || selected == null) return;
     context.push(AppRoutes.xeroProduct(selected.xeroItemId));
@@ -237,8 +268,12 @@ class _ProductsPageState extends State<ProductsPage> {
   Future<void> _openScanChooser() async {
     final choice = await showModalBottomSheet<_ScanChoice>(
       context: context,
+      // Keep the app shell bottom bar visible. We instead pad the sheet so its
+      // content sits *above* the bottom bar.
+      useRootNavigator: false,
+      useSafeArea: true,
       showDragHandle: true,
-      builder: (context) => const _ScanChoiceSheet(),
+      builder: (context) => const BottomSheetAboveNavBar(child: _ScanChoiceSheet()),
     );
 
     if (!mounted || choice == null) return;
