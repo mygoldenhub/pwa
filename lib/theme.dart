@@ -81,18 +81,18 @@ extension TextStyleExtensions on TextStyle {
 /// Modern, neutral color palette for light mode
 /// Uses soft grays and blues instead of purple for a contemporary look
 class LightModeColors {
-  // Primary (requested): rgb(115,57,219)
-  static const lightPrimary = Color(0xFF7339DB);
+  // White/black scheme
+  static const lightPrimary = Color(0xFF000000);
   static const lightOnPrimary = Color(0xFFFFFFFF);
-  static const lightPrimaryContainer = Color(0xFFE9DFFF);
-  static const lightOnPrimaryContainer = Color(0xFF25005A);
+  static const lightPrimaryContainer = Color(0xFFF2F2F2);
+  static const lightOnPrimaryContainer = Color(0xFF000000);
 
-  // Secondary: Cool neutral
-  static const lightSecondary = Color(0xFF5D5B66);
+  // Secondary: keep neutral + readable
+  static const lightSecondary = Color(0xFF111111);
   static const lightOnSecondary = Color(0xFFFFFFFF);
 
-  // Tertiary: Soft accent
-  static const lightTertiary = Color(0xFF4B6BFF);
+  // Tertiary: subtle neutral accent (used sparingly)
+  static const lightTertiary = Color(0xFF2A2A2A);
   static const lightOnTertiary = Color(0xFFFFFFFF);
 
   // Error colors
@@ -101,17 +101,17 @@ class LightModeColors {
   static const lightErrorContainer = Color(0xFFFFDAD6);
   static const lightOnErrorContainer = Color(0xFF410002);
 
-  // Surface and background: crisp whites
+  // Surface and background
   static const lightSurface = Color(0xFFFFFFFF);
-  static const lightOnSurface = Color(0xFF1A1C1E);
-  static const lightBackground = Color(0xFFF6F7FB);
-  static const lightSurfaceVariant = Color(0xFFF0F1F7);
-  static const lightOnSurfaceVariant = Color(0xFF44474E);
+  static const lightOnSurface = Color(0xFF000000);
+  static const lightBackground = Color(0xFFFFFFFF);
+  static const lightSurfaceVariant = Color(0xFFF6F6F6);
+  static const lightOnSurfaceVariant = Color(0xFF202020);
 
   // Outline and shadow
-  static const lightOutline = Color(0xFF74777F);
+  static const lightOutline = Color(0xFF2B2B2B);
   static const lightShadow = Color(0xFF000000);
-  static const lightInversePrimary = Color(0xFFBDA8FF);
+  static const lightInversePrimary = Color(0xFFFFFFFF);
 }
 
 /// Dark mode colors with good contrast
@@ -215,6 +215,7 @@ ThemeData get lightTheme => ThemeData(
   ),
   brightness: Brightness.light,
   scaffoldBackgroundColor: LightModeColors.lightBackground,
+  iconTheme: const IconThemeData(color: LightModeColors.lightOnSurface),
   appBarTheme: const AppBarTheme(
     backgroundColor: Colors.transparent,
     foregroundColor: LightModeColors.lightOnSurface,
@@ -246,12 +247,15 @@ ThemeData get lightTheme => ThemeData(
   ),
   filledButtonTheme: FilledButtonThemeData(
     style: FilledButton.styleFrom(
+      backgroundColor: LightModeColors.lightPrimary,
+      foregroundColor: LightModeColors.lightOnPrimary,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.lg)),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
     ),
   ),
   outlinedButtonTheme: OutlinedButtonThemeData(
     style: OutlinedButton.styleFrom(
+      foregroundColor: LightModeColors.lightOnSurface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.lg)),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       side: BorderSide(color: LightModeColors.lightOutline.withValues(alpha: 0.30)),
@@ -259,7 +263,7 @@ ThemeData get lightTheme => ThemeData(
   ),
   textButtonTheme: TextButtonThemeData(
     style: TextButton.styleFrom(
-      foregroundColor: LightModeColors.lightPrimary,
+      foregroundColor: LightModeColors.lightOnSurface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.lg)),
     ),
   ),

@@ -28,7 +28,8 @@ class AuthScaffold extends StatelessWidget {
     required this.icon,
     required this.child,
     this.subtitle,
-    this.showLogo = true,
+    // App-wide change: top-left corner brand is no longer shown.
+    this.showLogo = false,
     this.showHeader = true,
     this.showBack = false,
     this.onBack,
@@ -81,6 +82,8 @@ class AuthScaffold extends StatelessWidget {
                   ),
                 ),
               ),
+              // Intentionally no global top-left logo.
+              // (Kept behind a flag so it can be re-enabled later if needed.)
               if (showLogo)
                 Positioned(
                   top: 10,

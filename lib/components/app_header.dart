@@ -35,6 +35,9 @@ class AppImpactHeader extends StatelessWidget implements PreferredSizeWidget {
     final border = isDark ? Colors.white.withValues(alpha: 0.12) : cs.outline.withValues(alpha: 0.10);
     final label = (title ?? '').trim();
 
+    // App-wide change: remove the top-left logo from all pages.
+    final effectiveLeading = leading;
+
     return Material(
       color: bg,
       child: SafeArea(
@@ -45,10 +48,7 @@ class AppImpactHeader extends StatelessWidget implements PreferredSizeWidget {
           decoration: BoxDecoration(border: Border(bottom: BorderSide(color: border, width: 1))),
           child: Row(
             children: [
-              if (leading != null) ...[
-                leading!,
-                const SizedBox(width: 10),
-              ],
+              if (effectiveLeading != null) ...[effectiveLeading, const SizedBox(width: 10)],
               _HeaderTitlePill(label: label.isEmpty ? ' ' : label, tone: tone),
               const Spacer(),
               if (actions != null) ...[
