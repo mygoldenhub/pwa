@@ -670,31 +670,32 @@ class _CartItemCardState extends State<_CartItemCard> {
                           const SizedBox(width: AppSpacing.md),
                           Expanded(
                             flex: 1,
-                            child: Stack(
-                              fit: StackFit.expand,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
                               children: [
-                                Align(
-                                  alignment: Alignment.centerRight,
-                                  child: _QtyStepper(
-                                    value: qty,
-                                    isLoading: _updating,
-                                    onCommitted: _setQty,
+                                Expanded(
+                                  child: Align(
+                                    alignment: Alignment.centerRight,
+                                    child: _QtyStepper(
+                                      value: qty,
+                                      isLoading: _updating,
+                                      onCommitted: _setQty,
+                                    ),
                                   ),
                                 ),
+                                const SizedBox(height: AppSpacing.sm),
                                 Align(
                                   alignment: Alignment.bottomRight,
-                                  child: Padding(
-                                    padding: const EdgeInsets.only(top: AppSpacing.md),
-                                    child: IconButton(
-                                      tooltip: 'Remove',
-                                      onPressed: (_updating || widget.isDeleting) ? null : _delete,
-                                      style: IconButton.styleFrom(
-                                        backgroundColor: cs.surfaceContainerHighest,
-                                        foregroundColor: cs.error,
-                                        splashFactory: NoSplash.splashFactory,
-                                      ),
-                                      icon: const Icon(Icons.delete_outline),
+                                  child: IconButton(
+                                    tooltip: 'Remove',
+                                    onPressed: (_updating || widget.isDeleting) ? null : _delete,
+                                    style: IconButton.styleFrom(
+                                      backgroundColor: cs.surface,
+                                      foregroundColor: cs.error,
+                                      splashFactory: NoSplash.splashFactory,
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
                                     ),
+                                    icon: const Icon(Icons.delete_outline),
                                   ),
                                 ),
                               ],
@@ -724,15 +725,21 @@ class _QtyStepper extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return QuantityInput(
-      value: value,
-      min: 1,
-      max: 999,
-      enabled: true,
-      isLoading: isLoading,
-      compact: true,
-      commitWhileTyping: false,
-      onCommitted: onCommitted,
+    // The cart card splits space 50/50; on very small screens that can get tight.
+    // Scale down prevents RenderFlex overflow while keeping the same visual style.
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerRight,
+      child: QuantityInput(
+        value: value,
+        min: 1,
+        max: 999,
+        enabled: true,
+        isLoading: isLoading,
+        compact: true,
+        commitWhileTyping: false,
+        onCommitted: onCommitted,
+      ),
     );
   }
 }
