@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/app_state.dart';
 import 'package:pwa/components/app_header.dart';
+import 'package:pwa/components/quantity_input.dart';
 import 'package:pwa/models/cart_item.dart';
 import 'package:pwa/models/xero_product.dart';
 import 'package:pwa/nav.dart';
@@ -666,10 +667,9 @@ class _CartItemCardState extends State<_CartItemCard> {
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
                         _QtyStepper(
-                          quantity: qty,
+                          value: qty,
                           isLoading: _updating,
-                          onDecrement: () => _setQty(qty - 1),
-                          onIncrement: () => _setQty(qty + 1),
+                          onCommitted: _setQty,
                         ),
                         const SizedBox(height: AppSpacing.md),
                         IconButton(
@@ -693,83 +693,26 @@ class _CartItemCardState extends State<_CartItemCard> {
 }
 
 class _QtyStepper extends StatelessWidget {
-  final int quantity;
+  final int value;
   final bool isLoading;
-  final VoidCallback onDecrement;
-  final VoidCallback onIncrement;
+  final ValueChanged<int> onCommitted;
 
   const _QtyStepper({
-    required this.quantity,
+    required this.value,
     required this.isLoading,
-    required this.onDecrement,
-    required this.onIncrement,
+    required this.onCommitted,
   });
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final tt = Theme.of(context).textTheme;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-      decoration: BoxDecoration(
-        color: cs.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: cs.outline.withValues(alpha: 0.10)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _QtyIconButton(
-            icon: Icons.remove,
-            enabled: !isLoading && quantity > 1,
-            onTap: onDecrement,
-          ),
-          const SizedBox(width: 12),
-          AnimatedSwitcher(
-            duration: const Duration(milliseconds: 160),
-            switchInCurve: Curves.easeOutCubic,
-            switchOutCurve: Curves.easeInCubic,
-            transitionBuilder: (child, anim) => ScaleTransition(scale: anim, child: child),
-            child: Text(
-              '$quantity',
-              key: ValueKey(quantity),
-              style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w900, fontSize: 18),
-            ),
-          ),
-          const SizedBox(width: 12),
-          _QtyIconButton(
-            icon: Icons.add,
-            enabled: !isLoading && quantity < 999,
-            onTap: onIncrement,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _QtyIconButton extends StatelessWidget {
-  final IconData icon;
-  final bool enabled;
-  final VoidCallback onTap;
-
-  const _QtyIconButton({required this.icon, required this.enabled, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return IconButton(
-      constraints: const BoxConstraints.tightFor(width: 40, height: 40),
-      padding: EdgeInsets.zero,
-      onPressed: enabled ? onTap : null,
-      style: IconButton.styleFrom(
-        backgroundColor: cs.surface,
-        foregroundColor: enabled ? cs.primary : cs.onSurfaceVariant.withValues(alpha: 0.45),
-        splashFactory: NoSplash.splashFactory,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-      icon: Icon(icon, size: 18),
+    return QuantityInput(
+      value: value,
+      min: 1,
+      max: 999,
+      enabled: true,
+      isLoading: isLoading,
+      commitWhileTyping: false,
+      onCommitted: onCommitted,
     );
   }
 }
@@ -964,7 +907,7 @@ class _XeroProductNamePickerSheetState extends State<_XeroProductNamePickerSheet
                 ),
               ],
             ),
-            Text('Start typing to search products synced from Xero.', style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant)),
+            Text('Start typing to search products in store.', style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant)),
             const SizedBox(height: AppSpacing.lg),
             TextField(
               controller: _controller,
@@ -1003,7 +946,7 @@ class _XeroProductNamePickerSheetState extends State<_XeroProductNamePickerSheet
                 switchInCurve: Curves.easeOut,
                 switchOutCurve: Curves.easeIn,
                 child: _query.trim().isEmpty
-                    ? const _HintPanel(key: ValueKey('hint'), icon: Icons.lightbulb_outline, text: 'Try searching by product name, like “Coca” or “Milk”.')
+                    ? const _HintPanel(key: ValueKey('hint'), icon: Icons.lightbulb_outline, text: 'Try searching by product name, like “Ardex FG 8 misty grey”.')
                     : (!_isLoading && _results.isEmpty)
                         ? const _HintPanel(
                             key: ValueKey('empty'),

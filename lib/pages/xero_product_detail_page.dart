@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/components/app_header.dart';
+import 'package:pwa/components/quantity_input.dart';
 import 'package:pwa/models/xero_product.dart';
 import 'package:pwa/services/cart_service.dart';
 import 'package:pwa/services/xero_product_service.dart';
@@ -129,12 +130,13 @@ class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
                                 crossAxisAlignment: CrossAxisAlignment.center,
                                 children: [
                                   Expanded(child: Text('Quantity', style: Theme.of(context).textTheme.titleLarge?.semiBold)),
-                                  QuantitySelector(
+                                  QuantityInput(
                                     value: _quantity,
-                                    onChanged: (v) => setState(() => _quantity = v),
                                     min: 1,
                                     max: 9999,
-                                  ),
+                                    enabled: !_isAdding,
+                                    onChanged: (v) => setState(() => _quantity = v),
+                                  )
                                 ],
                               ),
                             ],
@@ -154,7 +156,7 @@ class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
                               : () async {
                                   setState(() => _isAdding = true);
                                   try {
-                                     await CartService.upsertXeroProduct(product: p, quantity: _quantity);
+                                     await CartService.addOrIncrementXeroProduct(product: p, quantity: _quantity);
                                     if (!context.mounted) return;
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(content: Text('Added "${p.name}" × $_quantity')),
@@ -227,94 +229,3 @@ class _InfoRow extends StatelessWidget {
     );
   }
 }
-
-/// A compact quantity stepper with modern styling.
-class QuantitySelector extends StatelessWidget {
-  final int value;
-  final int min;
-  final int max;
-  final ValueChanged<int> onChanged;
-
-  const QuantitySelector({super.key, required this.value, required this.onChanged, this.min = 1, this.max = 9999});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final canDec = value > min;
-    final canInc = value < max;
-
-    return Container(
-      padding: const EdgeInsets.all(6),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(AppRadius.lg),
-        color: cs.surfaceContainerHighest.withValues(alpha: 0.55),
-        border: Border.all(color: cs.outline.withValues(alpha: 0.10)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _QtyButton(
-            tooltip: 'Decrease',
-            enabled: canDec,
-            icon: Icons.remove,
-            onTap: () => onChanged((value - 1).clamp(min, max)),
-          ),
-          const SizedBox(width: AppSpacing.sm),
-          SizedBox(
-            width: 64,
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 160),
-              transitionBuilder: (child, anim) => FadeTransition(opacity: anim, child: child),
-              child: Text(
-                key: ValueKey(value),
-                value.toString(),
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleLarge?.semiBold,
-              ),
-            ),
-          ),
-          const SizedBox(width: AppSpacing.sm),
-          _QtyButton(
-            tooltip: 'Increase',
-            enabled: canInc,
-            icon: Icons.add,
-            onTap: () => onChanged((value + 1).clamp(min, max)),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _QtyButton extends StatelessWidget {
-  final String tooltip;
-  final bool enabled;
-  final IconData icon;
-  final VoidCallback onTap;
-
-  const _QtyButton({required this.tooltip, required this.enabled, required this.icon, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Tooltip(
-      message: tooltip,
-      child: GestureDetector(
-        onTap: enabled ? onTap : null,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 140),
-          curve: Curves.easeOut,
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(AppRadius.md),
-            color: enabled ? cs.primaryContainer : cs.surface,
-            border: Border.all(color: cs.outline.withValues(alpha: enabled ? 0 : 0.10)),
-          ),
-          child: Icon(icon, size: 22, color: enabled ? cs.onPrimaryContainer : cs.onSurfaceVariant),
-        ),
-      ),
-    );
-  }
-}
-

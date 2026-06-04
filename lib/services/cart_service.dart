@@ -55,6 +55,65 @@ class CartService {
     }
   }
 
+  /// Adds an item to the cart.
+  ///
+  /// - If the product does not exist in the user's cart yet, it inserts a row.
+  /// - If it already exists, it increments the existing quantity.
+  static Future<void> addOrIncrementXeroProduct({
+    required XeroProduct product,
+    required int quantity,
+  }) async {
+    final userId = _requireUserId();
+    final addQty = quantity <= 0 ? 1 : quantity;
+
+    try {
+      final existing = await SupabaseConfig.client
+          .from(table)
+          .select('id, quantity')
+          .eq('user_id', userId)
+          .eq('xero_item_id', product.xeroItemId)
+          .maybeSingle();
+
+      // Supabase `cart_items.unit_price_cents` is stored as a dollar amount (double).
+      // Convert our internal cents representation back into dollars.
+      final unitPriceDollars = (product.salePriceCents ?? 0) / 100.0;
+
+      if (existing == null) {
+        await SupabaseConfig.client.from(table).insert({
+          'user_id': userId,
+          'xero_item_id': product.xeroItemId,
+          'product_name': product.name,
+          'product_code': product.code,
+          'unit_price_cents': unitPriceDollars,
+          'quantity': addQty,
+        });
+        return;
+      }
+
+      final existingQty = (existing['quantity'] as num?)?.toInt() ?? 0;
+      final newQty = (existingQty + addQty).clamp(1, 9999);
+      final cartItemId = existing['id']?.toString();
+      if (cartItemId == null || cartItemId.isEmpty) {
+        throw 'Cart item id missing for existing row.';
+      }
+
+      await SupabaseConfig.client
+          .from(table)
+          .update({
+            'quantity': newQty,
+            // Keep the row fresh in case the name/price changed in Xero.
+            'product_name': product.name,
+            'product_code': product.code,
+            'unit_price_cents': unitPriceDollars,
+          })
+          .eq('id', cartItemId)
+          .eq('user_id', userId);
+    } catch (e) {
+      debugPrint('CartService.addOrIncrementXeroProduct failed: $e');
+      rethrow;
+    }
+  }
+
   static Future<void> updateQuantity({required String cartItemId, required int quantity}) async {
     final userId = _requireUserId();
     final q = quantity <= 0 ? 1 : quantity;
