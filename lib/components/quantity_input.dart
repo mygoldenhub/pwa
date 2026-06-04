@@ -16,6 +16,8 @@ class QuantityInput extends StatefulWidget {
   final int max;
   final bool enabled;
   final bool isLoading;
+  /// Use a smaller, more compact layout (better for tight list rows).
+  final bool compact;
   /// When `true`, typing will trigger a debounced `onCommitted`.
   ///
   /// Set this to `false` for scenarios like Cart where you only want to write
@@ -31,6 +33,7 @@ class QuantityInput extends StatefulWidget {
     this.max = 9999,
     this.enabled = true,
     this.isLoading = false,
+    this.compact = false,
     this.commitWhileTyping = true,
     this.onChanged,
     this.onCommitted,
@@ -135,11 +138,18 @@ class _QuantityInputState extends State<QuantityInput> {
     final canDec = widget.value > widget.min;
     final canInc = widget.value < widget.max;
 
+    final outerPadding = widget.compact ? const EdgeInsets.all(4) : const EdgeInsets.all(6);
+    final fieldWidth = widget.compact ? 56.0 : 72.0;
+    final fieldHeight = widget.compact ? 40.0 : 44.0;
+    final buttonExtent = widget.compact ? 38.0 : 44.0;
+    final iconSize = widget.compact ? 18.0 : 20.0;
+    final gap = widget.compact ? AppSpacing.xs : AppSpacing.sm;
+
     return AnimatedOpacity(
       duration: const Duration(milliseconds: 140),
       opacity: widget.enabled ? 1.0 : 0.55,
       child: Container(
-        padding: const EdgeInsets.all(6),
+        padding: outerPadding,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(AppRadius.lg),
           color: cs.surfaceContainerHighest.withValues(alpha: 0.55),
@@ -153,11 +163,13 @@ class _QuantityInputState extends State<QuantityInput> {
               icon: Icons.remove,
               enabled: widget.enabled && !widget.isLoading && canDec,
               onTap: () => _stepBy(-1),
+              extent: buttonExtent,
+              iconSize: iconSize,
             ),
-            const SizedBox(width: AppSpacing.sm),
+            SizedBox(width: gap),
             SizedBox(
-              width: 72,
-              height: 44,
+              width: fieldWidth,
+              height: fieldHeight,
               child: TextField(
                 controller: _controller,
                 focusNode: _focusNode,
@@ -165,13 +177,13 @@ class _QuantityInputState extends State<QuantityInput> {
                 keyboardType: TextInputType.number,
                 textInputAction: TextInputAction.done,
                 textAlign: TextAlign.center,
-                style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w900),
+                style: (widget.compact ? tt.titleSmall : tt.titleMedium)?.copyWith(fontWeight: FontWeight.w900),
                 maxLength: 4,
                 buildCounter: (_, {required currentLength, required isFocused, maxLength}) => null,
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                 decoration: InputDecoration(
                   isDense: true,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                  contentPadding: EdgeInsets.symmetric(horizontal: widget.compact ? 8 : 10, vertical: widget.compact ? 10 : 12),
                   filled: true,
                   fillColor: cs.surface,
                   enabledBorder: OutlineInputBorder(
@@ -193,12 +205,14 @@ class _QuantityInputState extends State<QuantityInput> {
                 onSubmitted: (_) => _commitFromText(),
               ),
             ),
-            const SizedBox(width: AppSpacing.sm),
+            SizedBox(width: gap),
             _QtyIconButton(
               tooltip: 'Increase',
               icon: Icons.add,
               enabled: widget.enabled && !widget.isLoading && canInc,
               onTap: () => _stepBy(1),
+              extent: buttonExtent,
+              iconSize: iconSize,
             ),
           ],
         ),
@@ -212,8 +226,10 @@ class _QtyIconButton extends StatelessWidget {
   final IconData icon;
   final bool enabled;
   final VoidCallback onTap;
+  final double extent;
+  final double iconSize;
 
-  const _QtyIconButton({required this.tooltip, required this.icon, required this.enabled, required this.onTap});
+  const _QtyIconButton({required this.tooltip, required this.icon, required this.enabled, required this.onTap, required this.extent, required this.iconSize});
 
   @override
   Widget build(BuildContext context) {
@@ -221,7 +237,7 @@ class _QtyIconButton extends StatelessWidget {
     return Tooltip(
       message: tooltip,
       child: IconButton(
-        constraints: const BoxConstraints.tightFor(width: 44, height: 44),
+        constraints: BoxConstraints.tightFor(width: extent, height: extent),
         padding: EdgeInsets.zero,
         onPressed: enabled ? onTap : null,
         style: IconButton.styleFrom(
@@ -230,7 +246,7 @@ class _QtyIconButton extends StatelessWidget {
           splashFactory: NoSplash.splashFactory,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
         ),
-        icon: Icon(icon, size: 20),
+        icon: Icon(icon, size: iconSize),
       ),
     );
   }

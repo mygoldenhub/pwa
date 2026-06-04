@@ -632,59 +632,78 @@ class _CartItemCardState extends State<_CartItemCard> {
                   borderRadius: BorderRadius.circular(AppRadius.xl),
                   border: Border.all(color: cs.outline.withValues(alpha: 0.12)),
                 ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    // Split content 50/50 so the qty controls never crowd out the product info.
+                    return IntrinsicHeight(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          Text(
-                            widget.item.productName,
-                            style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w800, fontSize: 18),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
+                          Expanded(
+                            flex: 1,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  widget.item.productName,
+                                  style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w800, fontSize: 18),
+                                  maxLines: 3,
+                                  softWrap: true,
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  (widget.item.productCode == null || widget.item.productCode!.trim().isEmpty)
+                                      ? 'SKU: —'
+                                      : 'SKU: ${widget.item.productCode}',
+                                  style: tt.bodyMedium?.withColor(cs.onSurfaceVariant),
+                                  maxLines: 2,
+                                  softWrap: true,
+                                ),
+                                const SizedBox(height: AppSpacing.md),
+                                Text(
+                                  '\$$price',
+                                  style: tt.titleLarge?.copyWith(fontWeight: FontWeight.w900),
+                                ),
+                              ],
+                            ),
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            (widget.item.productCode == null || widget.item.productCode!.trim().isEmpty)
-                                ? 'SKU: —'
-                                : 'SKU: ${widget.item.productCode}',
-                            style: tt.bodyMedium?.withColor(cs.onSurfaceVariant),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          const SizedBox(height: AppSpacing.md),
-                          Text(
-                            '\$$price',
-                            style: tt.titleLarge?.copyWith(fontWeight: FontWeight.w900),
+                          const SizedBox(width: AppSpacing.md),
+                          Expanded(
+                            flex: 1,
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                Align(
+                                  alignment: Alignment.centerRight,
+                                  child: _QtyStepper(
+                                    value: qty,
+                                    isLoading: _updating,
+                                    onCommitted: _setQty,
+                                  ),
+                                ),
+                                Align(
+                                  alignment: Alignment.bottomRight,
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(top: AppSpacing.md),
+                                    child: IconButton(
+                                      tooltip: 'Remove',
+                                      onPressed: (_updating || widget.isDeleting) ? null : _delete,
+                                      style: IconButton.styleFrom(
+                                        backgroundColor: cs.surfaceContainerHighest,
+                                        foregroundColor: cs.error,
+                                        splashFactory: NoSplash.splashFactory,
+                                      ),
+                                      icon: const Icon(Icons.delete_outline),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ],
                       ),
-                    ),
-                    const SizedBox(width: AppSpacing.md),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        _QtyStepper(
-                          value: qty,
-                          isLoading: _updating,
-                          onCommitted: _setQty,
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        IconButton(
-                          tooltip: 'Remove',
-                          onPressed: (_updating || widget.isDeleting) ? null : _delete,
-                          style: IconButton.styleFrom(
-                            backgroundColor: cs.surfaceContainerHighest,
-                            foregroundColor: cs.error,
-                            splashFactory: NoSplash.splashFactory,
-                          ),
-                          icon: const Icon(Icons.delete_outline),
-                        ),
-                      ],
-                    ),
-                  ],
+                    );
+                  },
                 ),
               ),
       ),
@@ -711,6 +730,7 @@ class _QtyStepper extends StatelessWidget {
       max: 999,
       enabled: true,
       isLoading: isLoading,
+      compact: true,
       commitWhileTyping: false,
       onCommitted: onCommitted,
     );

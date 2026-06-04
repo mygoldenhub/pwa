@@ -126,18 +126,43 @@ class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
                                 style: Theme.of(context).textTheme.titleLarge?.semiBold,
                               ),
                               const SizedBox(height: AppSpacing.xl),
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.center,
-                                children: [
-                                  Expanded(child: Text('Quantity', style: Theme.of(context).textTheme.titleLarge?.semiBold)),
-                                  QuantityInput(
-                                    value: _quantity,
-                                    min: 1,
-                                    max: 9999,
-                                    enabled: !_isAdding,
-                                    onChanged: (v) => setState(() => _quantity = v),
-                                  )
-                                ],
+                              LayoutBuilder(
+                                builder: (context, constraints) {
+                                  // Prevent overflow on narrow mobile widths by stacking the label + input.
+                                  final isNarrow = constraints.maxWidth < 380;
+                                  final label = Text('Quantity', style: Theme.of(context).textTheme.titleLarge?.semiBold);
+                                  final input = Align(
+                                    alignment: Alignment.centerRight,
+                                    child: QuantityInput(
+                                      value: _quantity,
+                                      min: 1,
+                                      max: 9999,
+                                      enabled: !_isAdding,
+                                      compact: true,
+                                      onChanged: (v) => setState(() => _quantity = v),
+                                    ),
+                                  );
+
+                                  if (isNarrow) {
+                                    return Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        label,
+                                        const SizedBox(height: AppSpacing.sm),
+                                        input,
+                                      ],
+                                    );
+                                  }
+
+                                  return Row(
+                                    crossAxisAlignment: CrossAxisAlignment.center,
+                                    children: [
+                                      Expanded(child: label),
+                                      const SizedBox(width: AppSpacing.md),
+                                      Flexible(child: input),
+                                    ],
+                                  );
+                                },
                               ),
                             ],
                           ),
