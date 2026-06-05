@@ -138,3 +138,35 @@ where code is not null;
 
 create index if not exists idx_xero_products_updated_at
 on public.xero_products (updated_at desc);
+
+
+-- 1. Create the main invoice table
+CREATE TABLE invoice (
+    invoice_id TEXT PRIMARY KEY,
+    type TEXT,
+    invoice_num TEXT,
+    reference TEXT,
+    amount_due REAL,             -- float4 maps to REAL in PostgreSQL
+    amount_paid REAL,
+    amount_credited REAL,
+    currency_rate REAL,
+    is_discounted BOOLEAN,
+    has_attachments BOOLEAN,
+    contact JSONB,               -- JSONB is preferred over JSON for better performance
+    date_string TEXT,
+    date TIMESTAMPTZ,
+    due_date_string TEXT,
+    due_date TIMESTAMPTZ,
+    status TEXT,
+    line_amount_types TEXT,
+    sub_total REAL,
+    total_tax REAL,
+    total REAL,
+    updated_date_utc TIMESTAMPTZ,
+    currency_code TEXT,
+    full_paid_on_date TIMESTAMPTZ,
+    payments JSONB DEFAULT '[]'::jsonb,
+    line_items JSONB DEFAULT '[]'::jsonb
+);
+
+ALTER TABLE invoice ENABLE ROW LEVEL SECURITY
