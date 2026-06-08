@@ -107,37 +107,43 @@ create index if not exists idx_products_barcode on public.products (barcode);
 
 -- Xero Product & Services (Items) cache
 -- Synced hourly by the xero_sync_products edge function.
-create table if not exists public.xero_products (
-  xero_item_id text primary key,
-  code text null,
-  name text null,
-  -- Note: despite the "_cents" suffix, this is now stored as a dollar amount
-  -- (e.g. 91.0 for $91) and may include decimals.
-  sale_price_cents double precision null,
-  sales_account text null,
-  tax_rate text null,
-  description text null,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+-- 1. Create the streamlined xero_products table
+CREATE TABLE public.xero_products (
+    -- Primary & Identity keys
+    item_id TEXT PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    
+    -- Text Descriptions & Flags
+    description TEXT,
+    purchase_description TEXT,
+    is_tracked_as_inventory BOOLEAN DEFAULT false,
+    
+    -- Financials & Inventory
+    quantity_on_hand NUMERIC DEFAULT 0,
+    inventory_asset_account_code NUMERIC,
+    
+    -- Main JSON Objects (Contains your full payload data)
+    sales_details JSONB DEFAULT '{}'::jsonb,
+    purchase_details JSONB DEFAULT '{}'::jsonb,
+    
+    -- Metadata
+    updated_date_utc TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- RLS note:
--- If you have enabled Row Level Security for this table in Supabase,
--- you MUST add a SELECT policy, otherwise authenticated clients will see 0 rows.
--- Recommended minimal policy for a shared admin-managed integration:
---
--- alter table public.xero_products enable row level security;
--- create policy "xero_products_read" on public.xero_products
---   for select
---   to authenticated
---   using (true);
+-- 2. Create performance indexes for deep JSON querying
+CREATE INDEX idx_xero_products_sales_details ON public.xero_products USING gin (sales_details);
+CREATE INDEX idx_xero_products_purchase_details ON public.xero_products USING gin (purchase_details);
 
-create unique index if not exists idx_xero_products_code_unique
-on public.xero_products (code)
-where code is not null;
+-- 3. Safety: Enable Row Level Security (RLS)
+ALTER TABLE public.xero_products ENABLE ROW LEVEL SECURITY;
 
-create index if not exists idx_xero_products_updated_at
-on public.xero_products (updated_at desc);
+-- 4. Sample Policy: Adjust based on your Auth requirements
+CREATE POLICY "Allow public read access" 
+ON public.xero_products 
+FOR SELECT 
+USING (true);
+
 
 
 -- 1. Create the main invoice table

@@ -4,11 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/app_state.dart';
 import 'package:pwa/components/app_header.dart';
+import 'package:pwa/components/new_invoice_sheet.dart';
 import 'package:pwa/components/quantity_input.dart';
 import 'package:pwa/models/cart_item.dart';
 import 'package:pwa/models/xero_product.dart';
 import 'package:pwa/nav.dart';
 import 'package:pwa/services/cart_service.dart';
+import 'package:pwa/services/invoice_webhook_service.dart';
 import 'package:pwa/services/xero_product_service.dart';
 import 'package:pwa/theme.dart';
 
@@ -295,6 +297,110 @@ class _ProductsPageState extends State<ProductsPage> {
     }
   }
 
+  Future<void> _openNewInvoiceSheet({required int totalBudgetCents, required List<CartItem> cartItems}) async {
+    final cs = Theme.of(context).colorScheme;
+    final draft = await showDialog<InvoiceDraft>(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: cs.scrim.withValues(alpha: 0.52),
+      builder: (context) => AppCenteredModalDialog(
+        child: AppModalSurface(
+          padding: const EdgeInsets.all(AppSpacing.lg),
+          child: NewInvoiceSheet(totalBudgetCents: totalBudgetCents),
+        ),
+      ),
+    );
+    if (!mounted || draft == null) return;
+
+    await _createInvoice(draft: draft, cartItems: cartItems);
+  }
+
+  Future<void> _createInvoice({required InvoiceDraft draft, required List<CartItem> cartItems}) async {
+    final cs = Theme.of(context).colorScheme;
+    final contactId = widget.appState.auth.currentUser?.xeroAccountId?.trim() ?? '';
+    if (contactId.isEmpty) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('Missing Xero contactID. Please set users.xero_account_id first.')),
+        );
+      return;
+    }
+
+    // Show a small blocking progress dialog.
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: cs.scrim.withValues(alpha: 0.52),
+      builder: (context) => const AppCenteredModalDialog(
+        child: AppModalSurface(
+          child: Row(
+            children: [
+              SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5)),
+              SizedBox(width: AppSpacing.md),
+              Expanded(child: Text('Creating invoice…')),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    try {
+      // Enrich cart items with product details (account code, tax code, description, etc.).
+      final uniqueIds = cartItems.map((c) => c.xeroItemId).where((s) => s.trim().isNotEmpty).toSet().toList();
+      final products = await Future.wait(uniqueIds.map(XeroProductService.getByXeroItemId));
+      final map = <String, XeroProduct?>{};
+      for (var i = 0; i < uniqueIds.length; i++) {
+        map[uniqueIds[i]] = products[i];
+      }
+
+      final result = await InvoiceWebhookService.createInvoice(
+        draft: draft,
+        cartItems: cartItems,
+        productsByItemId: map,
+        contactId: contactId,
+      );
+
+      if (!mounted) return;
+      context.pop(); // close loading
+
+      // Webhook succeeded. Clear the customer's cart before going to Invoice Draft.
+      try {
+        await CartService.clearMyCart();
+      } catch (e) {
+        debugPrint('Failed to clear cart after invoice creation: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+            ..hideCurrentSnackBar()
+            ..showSnackBar(
+              SnackBar(
+                behavior: SnackBarBehavior.floating,
+                showCloseIcon: true,
+                margin: const EdgeInsets.all(AppSpacing.lg),
+                content: const Text('Invoice created, but failed to clear your cart. Please refresh and try again.'),
+              ),
+            );
+        }
+      }
+
+      // Navigate to a success page (after webhook success + cart clear).
+      context.go(AppRoutes.invoiceSuccess, extra: {'draft': draft, 'webhook': result.body, 'cartItems': cartItems});
+    } catch (e) {
+      if (!mounted) return;
+      context.pop(); // close loading
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            showCloseIcon: true,
+            margin: const EdgeInsets.all(AppSpacing.lg),
+            content: Text(e.toString()),
+          ),
+        );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -378,7 +484,7 @@ class _ProductsPageState extends State<ProductsPage> {
                           subtotal: subtotal,
                           distinctCount: itemsForSummary.length,
                           unitCount: totalUnits,
-                          onCheckout: itemsForSummary.isEmpty ? null : () => context.go(AppRoutes.invoice),
+                          onCheckout: itemsForSummary.isEmpty ? null : () => _openNewInvoiceSheet(totalBudgetCents: subtotalCents, cartItems: itemsForSummary),
                         ),
                         const SizedBox(height: AppSpacing.md),
                         Expanded(
@@ -634,75 +740,77 @@ class _CartItemCardState extends State<_CartItemCard> {
                 ),
                 child: LayoutBuilder(
                   builder: (context, constraints) {
-                    // Split content 50/50 so the qty controls never crowd out the product info.
-                    return IntrinsicHeight(
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Expanded(
-                            flex: 1,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  widget.item.productName,
-                                  style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w800, fontSize: 18),
-                                  maxLines: 3,
-                                  softWrap: true,
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  (widget.item.productCode == null || widget.item.productCode!.trim().isEmpty)
-                                      ? 'SKU: —'
-                                      : 'SKU: ${widget.item.productCode}',
-                                  style: tt.bodyMedium?.withColor(cs.onSurfaceVariant),
-                                  maxLines: 2,
-                                  softWrap: true,
-                                ),
-                                const SizedBox(height: AppSpacing.md),
-                                Text(
+                    // Avoid IntrinsicHeight + Expanded (can cause under-measured height and bottom overflows).
+                    // We still keep the 50/50 split so controls never crowd out product info.
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          flex: 1,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                widget.item.productName,
+                                style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w800, fontSize: 18),
+                                maxLines: 3,
+                                softWrap: true,
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                (widget.item.productCode == null || widget.item.productCode!.trim().isEmpty)
+                                    ? 'SKU: —'
+                                    : 'SKU: ${widget.item.productCode}',
+                                style: tt.bodyMedium?.withColor(cs.onSurfaceVariant),
+                                maxLines: 2,
+                                softWrap: true,
+                              ),
+                              const SizedBox(height: AppSpacing.md),
+                              FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerLeft,
+                                child: Text(
                                   '\$$price',
                                   style: tt.titleLarge?.copyWith(fontWeight: FontWeight.w900),
                                 ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: AppSpacing.md),
-                          Expanded(
-                            flex: 1,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Expanded(
-                                  child: Align(
-                                    alignment: Alignment.centerRight,
-                                    child: _QtyStepper(
-                                      value: qty,
-                                      isLoading: _updating,
-                                      onCommitted: _setQty,
-                                    ),
-                                  ),
+                        ),
+                        const SizedBox(width: AppSpacing.md),
+                        Expanded(
+                          flex: 1,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Align(
+                                alignment: Alignment.topRight,
+                                child: _QtyStepper(
+                                  value: qty,
+                                  isLoading: _updating,
+                                  onCommitted: _setQty,
                                 ),
-                                const SizedBox(height: AppSpacing.sm),
-                                Align(
-                                  alignment: Alignment.bottomRight,
-                                  child: IconButton(
-                                    tooltip: 'Remove',
-                                    onPressed: (_updating || widget.isDeleting) ? null : _delete,
-                                    style: IconButton.styleFrom(
-                                      backgroundColor: cs.surface,
-                                      foregroundColor: cs.error,
-                                      splashFactory: NoSplash.splashFactory,
-                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
-                                    ),
-                                    icon: const Icon(Icons.delete_outline),
+                              ),
+                              const SizedBox(height: AppSpacing.sm),
+                              Align(
+                                alignment: Alignment.bottomRight,
+                                child: IconButton(
+                                  tooltip: 'Remove',
+                                  onPressed: (_updating || widget.isDeleting) ? null : _delete,
+                                  style: IconButton.styleFrom(
+                                    backgroundColor: cs.surface,
+                                    foregroundColor: cs.error,
+                                    splashFactory: NoSplash.splashFactory,
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
                                   ),
+                                  icon: const Icon(Icons.delete_outline),
                                 ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     );
                   },
                 ),

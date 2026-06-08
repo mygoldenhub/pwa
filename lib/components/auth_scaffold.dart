@@ -58,7 +58,7 @@ class AuthScaffold extends StatelessWidget {
 
     return PopScope(
       canPop: !(showBack && onBack != null),
-      onPopInvoked: (didPop) {
+      onPopInvokedWithResult: (didPop, result) {
         if (didPop) return;
         if (!showBack) return;
         if (onBack == null) return;

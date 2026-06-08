@@ -5,7 +5,6 @@ import 'package:pwa/services/auth_service.dart';
 import 'package:pwa/services/product_service.dart';
 import 'package:pwa/supabase/supabase_config.dart';
 import 'package:pwa/theme.dart';
-import 'package:flutter/foundation.dart';
 
 /// Main entry point for the application
 ///

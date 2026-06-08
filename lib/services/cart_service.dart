@@ -134,4 +134,15 @@ class CartService {
       rethrow;
     }
   }
+
+  /// Removes all cart items for the currently signed-in user.
+  static Future<void> clearMyCart() async {
+    final userId = _requireUserId();
+    try {
+      await SupabaseConfig.client.from(table).delete().eq('user_id', userId);
+    } catch (e) {
+      debugPrint('CartService.clearMyCart failed: $e');
+      rethrow;
+    }
+  }
 }

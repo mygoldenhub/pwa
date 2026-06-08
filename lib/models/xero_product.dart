@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 class XeroProduct {
   /// Xero ItemID (UUID string)
   final String xeroItemId;
@@ -83,27 +85,41 @@ class XeroProduct {
   static XeroProduct fromRow(Map<String, dynamic> row) {
     DateTime? tryDate(dynamic v) => v == null ? null : DateTime.tryParse(v.toString());
 
-    // In Supabase, `xero_products.sale_price_cents` historically represented **cents** (int).
-    // The backend has now migrated it to a float/double storing the **dollar** amount
-    // (e.g. 91.0 for $91). Internally in the Flutter app we still treat prices as
-    // integer cents to keep cart math + formatting consistent.
-    int? parseSalePriceCents(dynamic v) {
+    Map<String, dynamic>? tryJsonMap(dynamic v) {
       if (v == null) return null;
-      final n = v as num?;
-      if (n == null) return null;
-      return (n * 100).round();
+      if (v is Map) return v.cast<String, dynamic>();
+      if (v is String) {
+        try {
+          final decoded = jsonDecode(v);
+          if (decoded is Map) return decoded.cast<String, dynamic>();
+        } catch (_) {
+          return null;
+        }
+      }
+      return null;
     }
 
+    // Old schema: `sale_price_cents` sometimes stored dollars (num), not cents.
+    // New schema: sales_details JSON includes UnitPrice.
+    int? parseSalePriceCents(dynamic v) {
+      if (v == null) return null;
+      if (v is num) return (v * 100).round();
+      return (num.tryParse(v.toString()) == null) ? null : (num.parse(v.toString()) * 100).round();
+    }
+
+    final salesDetails = tryJsonMap(row['sales_details']);
+    final unitPrice = salesDetails?['UnitPrice'] ?? salesDetails?['unit_price'] ?? salesDetails?['unitPrice'];
+
     return XeroProduct(
-      xeroItemId: row['xero_item_id']?.toString() ?? '',
+      xeroItemId: row['item_id']?.toString() ?? row['xero_item_id']?.toString() ?? '',
       code: row['code']?.toString(),
       name: row['name']?.toString() ?? '',
-      salePriceCents: parseSalePriceCents(row['sale_price_cents']),
-      salesAccount: row['sales_account']?.toString(),
-      taxRate: row['tax_rate']?.toString(),
+      salePriceCents: parseSalePriceCents(unitPrice ?? row['sale_price_cents']),
+      salesAccount: (salesDetails?['AccountCode'] ?? salesDetails?['account_code'] ?? row['sales_account'])?.toString(),
+      taxRate: (salesDetails?['TaxType'] ?? salesDetails?['tax_type'] ?? row['tax_rate'])?.toString(),
       description: row['description']?.toString(),
       createdAt: tryDate(row['created_at']),
-      updatedAt: tryDate(row['updated_at']),
+      updatedAt: tryDate(row['updated_date_utc'] ?? row['updated_at']),
     );
   }
 }

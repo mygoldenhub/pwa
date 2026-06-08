@@ -6,6 +6,117 @@ class XeroProductService {
   static const String _table = 'xero_products';
   static bool _didLogDiagnostics = false;
 
+  // The xero_products schema has evolved over time.
+  // New schema (2026): item_id, code, name, description, quantity_on_hand,
+  // sales_details (jsonb), purchase_details (jsonb), updated_date_utc
+  // Old schema: xero_item_id, sale_price_cents, sales_account, tax_rate, created_at, updated_at
+  static const String _selectFullNew =
+      'item_id, code, name, description, quantity_on_hand, sales_details, purchase_details, updated_date_utc';
+  static const String _selectMinimalNew = 'item_id, code, name, updated_date_utc';
+
+  static const String _selectFullOld =
+      'xero_item_id, code, name, sale_price_cents, sales_account, tax_rate, description, created_at, updated_at';
+  static const String _selectMinimalOld = 'xero_item_id, code, name, created_at, updated_at';
+
+  static bool _looksLikeMissingColumnOrCache(dynamic e) {
+    final s = e.toString().toLowerCase();
+    return s.contains('schema cache') || s.contains('could not find the') || s.contains('column');
+  }
+
+  static Future<List<Map<String, dynamic>>> _safeSearch(
+    String like, {
+    required int limit,
+  }) async {
+    Future<List<Map<String, dynamic>>> run(String select) async {
+      final res = await SupabaseService.from(_table)
+          .select(select)
+          .ilike('name', like)
+          .order('name', ascending: true)
+          .limit(limit);
+      return (res as List).cast<Map<String, dynamic>>();
+    }
+
+    // Prefer new schema; fall back to old schema; then fall back to minimal.
+    try {
+      return await run(_selectFullNew);
+    } catch (e) {
+      if (!_looksLikeMissingColumnOrCache(e)) rethrow;
+      debugPrint('XeroProductService: new-schema full select failed; trying old schema. Error: $e');
+    }
+
+    try {
+      return await run(_selectFullOld);
+    } catch (e) {
+      if (!_looksLikeMissingColumnOrCache(e)) rethrow;
+      debugPrint('XeroProductService: old-schema full select failed; trying minimal selects. Error: $e');
+    }
+
+    try {
+      return await run(_selectMinimalNew);
+    } catch (e) {
+      if (!_looksLikeMissingColumnOrCache(e)) rethrow;
+      debugPrint('XeroProductService: new-schema minimal select failed; trying old minimal. Error: $e');
+      return await run(_selectMinimalOld);
+    }
+  }
+
+  static Future<Map<String, dynamic>?> _safeGetSingle({String? xeroItemId, String? code}) async {
+    if ((xeroItemId == null || xeroItemId.isEmpty) && (code == null || code.isEmpty)) return null;
+
+    Future<Map<String, dynamic>?> runNewId(String select) async {
+      var q = SupabaseService.from(_table).select(select);
+      if (xeroItemId != null && xeroItemId.isNotEmpty) q = q.eq('item_id', xeroItemId);
+      if (code != null && code.isNotEmpty) q = q.eq('code', code);
+      final res = await q.maybeSingle();
+      if (res == null) return null;
+      return (res as Map).cast<String, dynamic>();
+    }
+
+    Future<Map<String, dynamic>?> runOldId(String select) async {
+      var q = SupabaseService.from(_table).select(select);
+      if (xeroItemId != null && xeroItemId.isNotEmpty) q = q.eq('xero_item_id', xeroItemId);
+      if (code != null && code.isNotEmpty) q = q.eq('code', code);
+      final res = await q.maybeSingle();
+      if (res == null) return null;
+      return (res as Map).cast<String, dynamic>();
+    }
+
+    Future<Map<String, dynamic>?> run(String select) async {
+      // IMPORTANT: do not reference columns that may not exist.
+      // Your current table uses `item_id` as the PK and does NOT have `xero_item_id`.
+      // If we build an `or(item_id.eq...,xero_item_id.eq...)` filter, PostgREST errors.
+      try {
+        return await runNewId(select);
+      } catch (e) {
+        if (!_looksLikeMissingColumnOrCache(e)) rethrow;
+        debugPrint('XeroProductService: item_id filter failed; trying legacy xero_item_id. Error: $e');
+        return await runOldId(select);
+      }
+    }
+
+    try {
+      return await run(_selectFullNew);
+    } catch (e) {
+      if (!_looksLikeMissingColumnOrCache(e)) rethrow;
+      debugPrint('XeroProductService: new-schema getSingle failed; trying old schema. Error: $e');
+    }
+
+    try {
+      return await run(_selectFullOld);
+    } catch (e) {
+      if (!_looksLikeMissingColumnOrCache(e)) rethrow;
+      debugPrint('XeroProductService: old-schema getSingle failed; trying minimal selects. Error: $e');
+    }
+
+    try {
+      return await run(_selectMinimalNew);
+    } catch (e) {
+      if (!_looksLikeMissingColumnOrCache(e)) rethrow;
+      debugPrint('XeroProductService: new-schema minimal getSingle failed; trying old minimal. Error: $e');
+      return await run(_selectMinimalOld);
+    }
+  }
+
   /// Search Xero products for typeahead UI.
   ///
   /// Behavior:
@@ -24,18 +135,10 @@ class XeroProductService {
       // PostgREST `or()` uses comma-separated filters.
       // We intentionally do not escape %/_ here; users rarely type them and
       // treating them as wildcards is acceptable for search UX.
-      final select = 'xero_item_id, code, name, sale_price_cents, sales_account, tax_rate, description, created_at, updated_at';
-
       final prefixLike = '${q}%';
       final containsLike = '%${q}%';
 
-      final prefixRes = await SupabaseService.from(_table)
-          .select(select)
-          .ilike('name', prefixLike)
-          .order('name', ascending: true)
-          .limit(limit);
-
-      final prefixRows = (prefixRes as List).cast<Map<String, dynamic>>();
+      final prefixRows = await _safeSearch(prefixLike, limit: limit);
       final prefixParsed = prefixRows
           .map(XeroProduct.fromRow)
           .where((p) => p.xeroItemId.isNotEmpty && p.name.trim().isNotEmpty)
@@ -44,13 +147,7 @@ class XeroProductService {
       if (prefixParsed.length >= limit) return prefixParsed;
 
       final remaining = limit - prefixParsed.length;
-      final containsRes = await SupabaseService.from(_table)
-          .select(select)
-          .ilike('name', containsLike)
-          .order('name', ascending: true)
-          .limit(limit);
-
-      final containsRows = (containsRes as List).cast<Map<String, dynamic>>();
+      final containsRows = await _safeSearch(containsLike, limit: limit);
       final containsParsed = containsRows
           .map(XeroProduct.fromRow)
           .where((p) => p.xeroItemId.isNotEmpty && p.name.trim().isNotEmpty)
@@ -104,7 +201,12 @@ class XeroProductService {
       debugPrint('XeroProductService: 0 matches for "$query". signedIn=${session != null}. userId=${session?.user.id}');
 
       // Try to read any row at all. If RLS blocks SELECT, this often returns an empty list.
-      final sample = await SupabaseService.from(_table).select('xero_item_id, name').limit(1);
+      dynamic sample;
+      try {
+        sample = await SupabaseService.from(_table).select('item_id, name').limit(1);
+      } catch (e) {
+        sample = await SupabaseService.from(_table).select('xero_item_id, name').limit(1);
+      }
       final sampleRows = (sample as List).cast<Map<String, dynamic>>();
       debugPrint('XeroProductService: sample read xero_products rows=${sampleRows.length}');
       if (sampleRows.isEmpty) {
@@ -123,11 +225,7 @@ class XeroProductService {
     final id = xeroItemId.trim();
     if (id.isEmpty) return null;
     try {
-      final row = await SupabaseService.selectSingle(
-        _table,
-        select: 'xero_item_id, code, name, sale_price_cents, sales_account, tax_rate, description, created_at, updated_at',
-        filters: {'xero_item_id': id},
-      );
+      final row = await _safeGetSingle(xeroItemId: id);
       if (row == null) return null;
       final p = XeroProduct.fromRow(row);
       return p.xeroItemId.isEmpty ? null : p;
@@ -141,11 +239,7 @@ class XeroProductService {
     final c = code.trim();
     if (c.isEmpty) return null;
     try {
-      final row = await SupabaseService.selectSingle(
-        _table,
-        select: 'xero_item_id, code, name, sale_price_cents, sales_account, tax_rate, description, created_at, updated_at',
-        filters: {'code': c},
-      );
+      final row = await _safeGetSingle(code: c);
       if (row == null) return null;
       final p = XeroProduct.fromRow(row);
       return p.xeroItemId.isEmpty ? null : p;

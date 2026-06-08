@@ -9,7 +9,6 @@
 // 3. Implement all abstract methods with your auth provider logic
 
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pwa/supabase/supabase_config.dart';
 

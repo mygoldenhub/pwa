@@ -6,6 +6,7 @@ import 'package:pwa/pages/app_shell_page.dart';
 import 'package:pwa/pages/auth_callback_page.dart';
 import 'package:pwa/pages/barcode_scanner_page.dart';
 import 'package:pwa/pages/invoice_page.dart';
+import 'package:pwa/pages/invoice_success_page.dart';
 import 'package:pwa/pages/loading_page.dart';
 import 'package:pwa/pages/login_page.dart';
 import 'package:pwa/pages/products_page.dart';
@@ -135,7 +136,19 @@ class AppRouter {
               routes: [
                 GoRoute(
                   path: AppRoutes.invoice,
-                  pageBuilder: (context, state) => const NoTransitionPage(child: InvoicePage()),
+                  pageBuilder: (context, state) {
+                    final extra = (state.extra is Map) ? (state.extra as Map) : const <String, dynamic>{};
+                    return NoTransitionPage(child: InvoicePage(draft: extra['draft'], webhook: extra['webhook']));
+                  },
+                  routes: [
+                    GoRoute(
+                      path: 'success',
+                      pageBuilder: (context, state) {
+                        final extra = (state.extra is Map) ? (state.extra as Map) : const <String, dynamic>{};
+                        return MaterialPage(child: InvoiceSuccessPage(draft: extra['draft'], webhook: extra['webhook'], cartItems: extra['cartItems']));
+                      },
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -168,6 +181,7 @@ class AppRoutes {
 
   static const String cart = '/app/cart';
   static const String invoice = '/app/invoice';
+  static const String invoiceSuccess = '/app/invoice/success';
   static const String account = '/app/account';
 
   static const String barcodeScan = '/app/cart/scan';
