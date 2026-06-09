@@ -328,14 +328,12 @@ class _InvoicePageState extends State<InvoicePage> {
     final textTheme = Theme.of(context).textTheme;
 
     if (_isLoadingInitial) {
-      return Column(
-        children: const [
-          InvoiceCardSkeleton(),
-          SizedBox(height: AppSpacing.md),
-          InvoiceCardSkeleton(),
-          SizedBox(height: AppSpacing.md),
-          InvoiceCardSkeleton(),
-        ],
+      // Match the Cart page loading behavior for consistency.
+      return const SizedBox(
+        height: 220,
+        child: Center(
+          child: CircularProgressIndicator(),
+        ),
       );
     }
 

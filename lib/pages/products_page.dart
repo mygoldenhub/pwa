@@ -419,10 +419,6 @@ class _ProductsPageState extends State<ProductsPage> {
           padding: AppSpacing.paddingLg,
           child: Column(
             children: [
-              _SearchBar(
-                onChanged: (v) => setState(() => _query = v),
-              ),
-              const SizedBox(height: AppSpacing.lg),
               Expanded(
                 child: StreamBuilder<List<CartItem>>(
                   stream: CartService.streamMyCart(),
@@ -460,16 +456,11 @@ class _ProductsPageState extends State<ProductsPage> {
                       }
                     }
 
-                    final q = _query.trim().toLowerCase();
-                    final filtered = q.isEmpty ? itemsForList : _filterAndRankCartItems(itemsForList, q);
-
-                    final visibleFiltered = filtered.where((i) => !_pendingRemovals.contains(i.id)).toList();
-                    if (visibleFiltered.isEmpty) {
+                    final visibleItems = itemsForList.where((i) => !_pendingRemovals.contains(i.id)).toList();
+                    if (visibleItems.isEmpty) {
                       return _EmptyState(
-                        title: itemsForSummary.isEmpty ? 'Your cart is empty' : 'No matches',
-                        subtitle: itemsForSummary.isEmpty
-                            ? 'Scan a barcode or search by product name to add items.'
-                            : 'Try a different product name.',
+                        title: 'Your cart is empty',
+                        subtitle: 'Scan a barcode to add items.',
                         onPrimaryAction: _openScanChooser,
                       );
                     }
@@ -489,7 +480,7 @@ class _ProductsPageState extends State<ProductsPage> {
                         const SizedBox(height: AppSpacing.md),
                         Expanded(
                           child: _CartList(
-                            items: filtered,
+                            items: itemsForList,
                             isDeleting: (id) => _pendingRemovals.contains(id),
                             onSetQty: (item, newQty) async {
                               final q = newQty.clamp(1, 999);
@@ -548,37 +539,6 @@ class _ProductsPageState extends State<ProductsPage> {
     );
   }
 
-  List<CartItem> _filterAndRankCartItems(List<CartItem> items, String qLower) {
-    final prefix = <CartItem>[];
-    final contains = <CartItem>[];
-    for (final i in items) {
-      final name = i.productName.toLowerCase();
-      if (name.startsWith(qLower)) {
-        prefix.add(i);
-      } else if (name.contains(qLower)) {
-        contains.add(i);
-      }
-    }
-    prefix.sort((a, b) => a.productName.toLowerCase().compareTo(b.productName.toLowerCase()));
-    contains.sort((a, b) => a.productName.toLowerCase().compareTo(b.productName.toLowerCase()));
-    return [...prefix, ...contains];
-  }
-}
-
-class _SearchBar extends StatelessWidget {
-  final ValueChanged<String> onChanged;
-  const _SearchBar({required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return TextField(
-      onChanged: onChanged,
-      decoration: const InputDecoration(
-        labelText: 'Search by product name',
-        prefixIcon: Icon(Icons.search),
-      ),
-    );
-  }
 }
 
 class _CartSummaryCard extends StatelessWidget {

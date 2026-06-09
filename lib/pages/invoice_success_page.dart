@@ -77,7 +77,7 @@ class InvoiceSuccessPage extends StatelessWidget {
         children: [
           Row(
             children: [
-              Expanded(child: Text('Budget summary', style: Theme.of(context).textTheme.titleMedium?.semiBold)),
+              Expanded(child: Text('Invoice summary', style: Theme.of(context).textTheme.titleMedium?.semiBold)),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(color: cs.primaryContainer, borderRadius: BorderRadius.circular(999)),
@@ -238,7 +238,7 @@ class InvoiceSuccessPage extends StatelessWidget {
                               // so the user lands on the normal invoice list view.
                               onPressed: () => context.go(AppRoutes.invoice),
                               icon: Icon(Icons.open_in_new, color: cs.onPrimary),
-                              label: Text('Goto Invoice', style: TextStyle(color: cs.onPrimary)),
+                              label: Text('Goto Invoic to confirm.', style: TextStyle(color: cs.onPrimary)),
                             ),
                           ),
                         ],

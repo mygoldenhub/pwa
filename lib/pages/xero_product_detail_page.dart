@@ -119,11 +119,6 @@ class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
                               ),
                               const SizedBox(height: AppSpacing.xl),
                               Text('Price: $priceText', style: Theme.of(context).textTheme.titleLarge?.semiBold),
-                              const SizedBox(height: AppSpacing.sm),
-                              Text(
-                                'Amount: ${(p.salesAccount ?? '').trim().isEmpty ? 'Standard Retail Price' : (p.salesAccount ?? 'Standard Retail Price')}',
-                                style: Theme.of(context).textTheme.titleLarge?.semiBold,
-                              ),
                               const SizedBox(height: AppSpacing.xl),
                               LayoutBuilder(
                                 builder: (context, constraints) {

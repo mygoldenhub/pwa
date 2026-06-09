@@ -52,9 +52,18 @@ class _NewInvoiceSheetState extends State<NewInvoiceSheet> {
   static const String _fixedCurrencyCode = 'AUD';
   static const double _fixedCurrencyRate = 1.0;
 
-  LineAmountType _lineAmountType = LineAmountType.exclusive;
-  DateTime _date = DateTime.now();
-  DateTime _dueDate = DateTime.now().add(const Duration(days: 7));
+  // Per requirement: fixed values (not editable).
+  static const LineAmountType _fixedLineAmountType = LineAmountType.exclusive;
+  late final DateTime _date;
+
+  DateTime get _dueDate => _date.add(const Duration(days: 7));
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    _date = DateTime(now.year, now.month, now.day);
+  }
 
   @override
   void dispose() {
@@ -62,48 +71,10 @@ class _NewInvoiceSheetState extends State<NewInvoiceSheet> {
     super.dispose();
   }
 
-  String _fmtDate(DateTime d) => '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-
-  Future<void> _pickDate({
-    required DateTime initial,
-    DateTime? firstDate,
-    DateTime? lastDate,
-    required ValueChanged<DateTime> onPicked,
-  }) async {
-    final cs = Theme.of(context).colorScheme;
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: initial,
-      firstDate: firstDate ?? DateTime(2000),
-      lastDate: lastDate ?? DateTime(2100),
-      builder: (context, child) {
-        // Keep a clean, modern surface without custom hardcoded colors.
-        return Theme(
-          data: Theme.of(context).copyWith(
-            dialogTheme: DialogThemeData(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.xl)),
-              backgroundColor: cs.surface,
-            ),
-          ),
-          child: child ?? const SizedBox.shrink(),
-        );
-      },
-    );
-    if (!mounted || picked == null) return;
-    onPicked(DateTime(picked.year, picked.month, picked.day));
-  }
+  String _fmtDate(DateTime d) => '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year.toString().padLeft(4, '0')}';
 
   void _submit() {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-
-    if (_dueDate.isBefore(_date)) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(content: Text('Due date cannot be earlier than Date.')),
-        );
-      return;
-    }
 
     Navigator.of(context).pop(
       InvoiceDraft(
@@ -111,7 +82,7 @@ class _NewInvoiceSheetState extends State<NewInvoiceSheet> {
         reference: _referenceCtrl.text.trim(),
         currencyCode: _fixedCurrencyCode,
         currencyRate: _fixedCurrencyRate,
-        lineAmountType: _lineAmountType,
+        lineAmountType: _fixedLineAmountType,
         date: _date,
         dueDate: _dueDate,
       ),
@@ -171,46 +142,18 @@ class _NewInvoiceSheetState extends State<NewInvoiceSheet> {
                 validator: (v) => (v == null || v.trim().isEmpty) ? 'Please enter a reference.' : null,
               ),
               const SizedBox(height: AppSpacing.md),
-              _ReadOnlyMetricField(label: 'Currency', value: '$_fixedCurrencyCode  (rate $_fixedCurrencyRate)'),
+              _ReadOnlyMetricField(label: 'Currency', value: _fixedCurrencyCode),
               const SizedBox(height: AppSpacing.md),
-              DropdownButtonFormField<LineAmountType>(
-                value: _lineAmountType,
-                items: LineAmountType.values.map((t) => DropdownMenuItem(value: t, child: Text(t.label))).toList(),
-                decoration: const InputDecoration(
-                  labelText: 'Line amount type',
-                  prefixIcon: Icon(Icons.rule_folder_outlined),
-                ),
-                onChanged: (v) => setState(() => _lineAmountType = v ?? LineAmountType.exclusive),
-              ),
+              _ReadOnlyInputField(label: 'Line amount type', value: _fixedLineAmountType.label, prefixIcon: Icons.rule_folder_outlined),
               const SizedBox(height: AppSpacing.md),
               Row(
                 children: [
                   Expanded(
-                    child: _DatePickerField(
-                      label: 'Date',
-                      value: _fmtDate(_date),
-                      icon: Icons.event,
-                      onTap: () => _pickDate(
-                        initial: _date,
-                        onPicked: (d) => setState(() {
-                          _date = d;
-                          if (_dueDate.isBefore(_date)) _dueDate = _date;
-                        }),
-                      ),
-                    ),
+                    child: _ReadOnlyInputField(label: 'Date', value: _fmtDate(_date), prefixIcon: Icons.event),
                   ),
                   const SizedBox(width: AppSpacing.md),
                   Expanded(
-                    child: _DatePickerField(
-                      label: 'Due date',
-                      value: _fmtDate(_dueDate),
-                      icon: Icons.event_available,
-                      onTap: () => _pickDate(
-                        initial: _dueDate,
-                        firstDate: _date,
-                        onPicked: (d) => setState(() => _dueDate = d.isBefore(_date) ? _date : d),
-                      ),
-                    ),
+                    child: _ReadOnlyInputField(label: 'Due date', value: _fmtDate(_dueDate), prefixIcon: Icons.event_available),
                   ),
                 ],
               ),
@@ -270,34 +213,22 @@ class _ReadOnlyMetricField extends StatelessWidget {
   }
 }
 
-class _DatePickerField extends StatelessWidget {
+class _ReadOnlyInputField extends StatelessWidget {
   final String label;
   final String value;
-  final IconData icon;
-  final VoidCallback onTap;
+  final IconData prefixIcon;
 
-  const _DatePickerField({required this.label, required this.value, required this.icon, required this.onTap});
+  const _ReadOnlyInputField({required this.label, required this.value, required this.prefixIcon});
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return GestureDetector(
-      onTap: onTap,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: InputDecorator(
-          decoration: InputDecoration(
-            labelText: label,
-            prefixIcon: Icon(icon),
-          ),
-          child: Row(
-            children: [
-              Expanded(child: Text(value, style: Theme.of(context).textTheme.bodyMedium)),
-              Icon(Icons.calendar_month, color: cs.onSurfaceVariant),
-            ],
-          ),
-        ),
+    return InputDecorator(
+      decoration: InputDecoration(
+        labelText: label,
+        prefixIcon: Icon(prefixIcon),
       ),
+      child: Text(value, style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurface)),
     );
   }
 }

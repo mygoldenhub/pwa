@@ -411,22 +411,47 @@ class _PaymentRow extends StatelessWidget {
     final tt = Theme.of(context).textTheme;
     final ref = (reference ?? '').trim();
     return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(dateText, style: tt.bodyMedium?.semiBold),
-              if (ref.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Text(ref, style: tt.labelSmall?.withColor(cs.onSurfaceVariant), softWrap: true),
-              ],
-            ],
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(dateText, style: tt.bodyMedium?.semiBold, softWrap: true),
           ),
         ),
         const SizedBox(width: AppSpacing.md),
-        Text(amountText, style: tt.bodyMedium?.semiBold, textAlign: TextAlign.right),
+        ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 160),
+          child: SizedBox(
+            height: 44,
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    ref.isEmpty ? '-' : ref,
+                    style: tt.labelSmall?.withColor(cs.onSurfaceVariant),
+                    textAlign: TextAlign.center,
+                    softWrap: true,
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    amountText,
+                    style: tt.bodyMedium?.semiBold,
+                    textAlign: TextAlign.center,
+                    softWrap: true,
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ],
     );
   }

@@ -60,6 +60,46 @@ class XeroProductService {
     }
   }
 
+  static Future<List<Map<String, dynamic>>> _safeSearchAllTokens(
+    List<String> tokens, {
+    required int limit,
+  }) async {
+    if (tokens.isEmpty) return [];
+
+    Future<List<Map<String, dynamic>>> run(String select) async {
+      var q = SupabaseService.from(_table).select(select);
+      // AND-match all tokens, order-independent.
+      for (final t in tokens) {
+        q = q.ilike('name', '%$t%');
+      }
+      final res = await q.order('name', ascending: true).limit(limit);
+      return (res as List).cast<Map<String, dynamic>>();
+    }
+
+    // Prefer new schema; fall back to old schema; then fall back to minimal.
+    try {
+      return await run(_selectFullNew);
+    } catch (e) {
+      if (!_looksLikeMissingColumnOrCache(e)) rethrow;
+      debugPrint('XeroProductService: new-schema token search failed; trying old schema. Error: $e');
+    }
+
+    try {
+      return await run(_selectFullOld);
+    } catch (e) {
+      if (!_looksLikeMissingColumnOrCache(e)) rethrow;
+      debugPrint('XeroProductService: old-schema token search failed; trying minimal selects. Error: $e');
+    }
+
+    try {
+      return await run(_selectMinimalNew);
+    } catch (e) {
+      if (!_looksLikeMissingColumnOrCache(e)) rethrow;
+      debugPrint('XeroProductService: new-schema minimal token search failed; trying old minimal. Error: $e');
+      return await run(_selectMinimalOld);
+    }
+  }
+
   static Future<Map<String, dynamic>?> _safeGetSingle({String? xeroItemId, String? code}) async {
     if ((xeroItemId == null || xeroItemId.isEmpty) && (code == null || code.isEmpty)) return null;
 
@@ -131,6 +171,12 @@ class XeroProductService {
     final q = _normalizePhraseQuery(query);
     if (q.isEmpty) return [];
 
+    // If the user typed multiple keywords, do order-independent AND matching.
+    // Example: "ex se silicon travertine" should match names containing all
+    // tokens, regardless of order.
+    final tokens = _tokenizeQuery(q);
+    if (tokens.length >= 2) return _searchByAllTokens(tokens, limit: limit, rawQueryForDiagnostics: q);
+
     try {
       // PostgREST `or()` uses comma-separated filters.
       // We intentionally do not escape %/_ here; users rarely type them and
@@ -169,12 +215,45 @@ class XeroProductService {
     }
   }
 
+  static Future<List<XeroProduct>> _searchByAllTokens(
+    List<String> tokens, {
+    required int limit,
+    required String rawQueryForDiagnostics,
+  }) async {
+    try {
+      final rows = await _safeSearchAllTokens(tokens, limit: limit);
+      final parsed = rows
+          .map(XeroProduct.fromRow)
+          .where((p) => p.xeroItemId.isNotEmpty && p.name.trim().isNotEmpty)
+          .toList();
+
+      if (parsed.isEmpty) {
+        await _logDiagnosticsOnce(query: rawQueryForDiagnostics);
+      }
+      return parsed;
+    } catch (e) {
+      debugPrint('XeroProductService token search failed (query="$rawQueryForDiagnostics", tokens=$tokens): $e');
+      return [];
+    }
+  }
+
   static String _normalizePhraseQuery(String raw) {
     // Keep the user's phrase intact (spaces matter for "exact phrase" intent),
     // but trim and collapse repeated whitespace.
     final trimmed = raw.trim();
     if (trimmed.isEmpty) return '';
     return trimmed.replaceAll(RegExp(r'\s+'), ' ');
+  }
+
+  static List<String> _tokenizeQuery(String normalizedPhrase) {
+    final tokens = normalizedPhrase
+        .split(' ')
+        .map((t) => t.trim())
+        .where((t) => t.isNotEmpty)
+        .toList();
+    // De-dupe while preserving order.
+    final seen = <String>{};
+    return tokens.where(seen.add).toList();
   }
 
   static Iterable<XeroProduct> _mergeUniqueById(List<XeroProduct> first, List<XeroProduct> second) sync* {
