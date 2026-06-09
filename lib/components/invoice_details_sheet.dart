@@ -87,6 +87,14 @@ class _InvoiceDetailsDialogState extends State<InvoiceDetailsDialog> {
     return (v == null || v.isEmpty) ? 'Line item' : v;
   }
 
+  String _qtyText(double qty) {
+    if (qty % 1 == 0) return qty.toInt().toString();
+    // Keep to a reasonable precision for fractional quantities.
+    return qty.toStringAsFixed(2);
+  }
+
+  String _unitTimesQtyText({required double unitAmount, required double quantity}) => '${unitAmount.toStringAsFixed(2)} × ${_qtyText(quantity)}';
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -169,13 +177,22 @@ class _InvoiceDetailsDialogState extends State<InvoiceDetailsDialog> {
                         Text('Line items', style: tt.titleMedium?.semiBold),
                         const SizedBox(height: AppSpacing.sm),
                         for (final li in lineItems) ...[
-                          _SheetCard(
-                            padding: AppSpacing.paddingMd,
-                            child: _LineItemRow(
-                              title: _lineItemTitle(li),
-                              meta: _buildLineItemMeta(li),
-                              amountText: _money(_asDouble(li['line_amount'] ?? li['LineAmount'] ?? li['lineAmount']) ?? _computeLineAmount(li), currencyCode: invoice.currencyCode),
-                            ),
+                          Builder(
+                            builder: (context) {
+                              final qty = _asDouble(li['quantity'] ?? li['Quantity']);
+                              final unit = _asDouble(li['unit_amount'] ?? li['UnitAmount'] ?? li['unitAmount']);
+                              final total = _asDouble(li['line_amount'] ?? li['LineAmount'] ?? li['lineAmount']) ?? _computeLineAmount(li);
+                              final unitTimesQty = (qty != null && unit != null) ? _unitTimesQtyText(unitAmount: unit, quantity: qty) : null;
+
+                              return _SheetCard(
+                                padding: AppSpacing.paddingMd,
+                                child: _LineItemRow(
+                                  title: _lineItemTitle(li),
+                                  unitTimesQtyText: unitTimesQty,
+                                  totalText: _money(total, currencyCode: invoice.currencyCode),
+                                ),
+                              );
+                            },
                           ),
                           const SizedBox(height: AppSpacing.sm),
                         ],
@@ -224,15 +241,6 @@ class _InvoiceDetailsDialogState extends State<InvoiceDetailsDialog> {
         child: dialog,
       ),
     );
-  }
-
-  String? _buildLineItemMeta(Map<String, dynamic> li) {
-    final qty = _asDouble(li['quantity'] ?? li['Quantity']);
-    final unit = _asDouble(li['unit_amount'] ?? li['UnitAmount'] ?? li['unitAmount']);
-    final meta = <String>[];
-    if (qty != null) meta.add('Qty ${qty % 1 == 0 ? qty.toInt() : qty}');
-    if (unit != null) meta.add('Unit ${unit.toStringAsFixed(2)}');
-    return meta.isEmpty ? null : meta.join(' · ');
   }
 
   double? _computeLineAmount(Map<String, dynamic> li) {
@@ -341,32 +349,50 @@ class _ErrorBlock extends StatelessWidget {
 
 class _LineItemRow extends StatelessWidget {
   final String title;
-  final String? meta;
-  final String amountText;
+  final String? unitTimesQtyText;
+  final String totalText;
 
-  const _LineItemRow({required this.title, required this.amountText, this.meta});
+  const _LineItemRow({required this.title, required this.totalText, this.unitTimesQtyText});
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
     return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(title, style: tt.bodyMedium?.semiBold, softWrap: true),
-              if (meta != null) ...[
-                const SizedBox(height: 4),
-                Text(meta!, style: tt.labelSmall?.withColor(cs.onSurfaceVariant), softWrap: true),
-              ],
             ],
           ),
         ),
         const SizedBox(width: AppSpacing.md),
-        Text(amountText, style: tt.bodyMedium?.semiBold, textAlign: TextAlign.right),
+        ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 140),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Text(
+                  (unitTimesQtyText ?? '-'),
+                  style: tt.labelSmall?.withColor(cs.onSurfaceVariant),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  totalText,
+                  style: tt.bodyMedium?.semiBold,
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ),
       ],
     );
   }
