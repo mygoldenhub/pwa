@@ -186,58 +186,69 @@ class InvoiceSuccessPage extends StatelessWidget {
     final typedCartItems = (cartItems is List<CartItem>) ? (cartItems as List<CartItem>) : null;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Success'), centerTitle: true),
+      appBar: AppBar(title: const Text('Success'), centerTitle: true, automaticallyImplyLeading: false),
       body: SafeArea(
-        child: Padding(
-          padding: AppSpacing.paddingLg,
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 520),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(AppRadius.xl),
-                  color: cs.surface,
-                  border: Border.all(color: cs.outline.withValues(alpha: 0.12)),
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 44,
-                          height: 44,
-                          decoration: BoxDecoration(color: cs.primaryContainer, borderRadius: BorderRadius.circular(AppRadius.lg)),
-                          child: Icon(Icons.check_rounded, size: 26, color: cs.onPrimaryContainer),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(child: Text('Invoice created', style: Theme.of(context).textTheme.titleLarge?.semiBold)),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    if (typedDraft != null)
-                      _buildBudgetSummary(
-                        context,
-                        draft: typedDraft,
-                        items: typedCartItems ?? const <CartItem>[],
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // This pattern keeps the success card vertically centered when the
+            // content is short, but still allows scrolling when the content is
+            // taller than the viewport (common on small phones).
+            return SingleChildScrollView(
+              padding: AppSpacing.paddingLg,
+              physics: const BouncingScrollPhysics(),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 520),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(AppRadius.xl),
+                        color: cs.surface,
+                        border: Border.all(color: cs.outline.withValues(alpha: 0.12)),
                       ),
-                    const SizedBox(height: 16),
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton.icon(
-                        // Navigate straight to the Invoice page (no extra payload)
-                        // so the user lands on the normal invoice list view.
-                        onPressed: () => context.go(AppRoutes.invoice),
-                        icon: Icon(Icons.open_in_new, color: cs.onPrimary),
-                        label: Text('Goto Invoice', style: TextStyle(color: cs.onPrimary)),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                width: 44,
+                                height: 44,
+                                decoration: BoxDecoration(color: cs.primaryContainer, borderRadius: BorderRadius.circular(AppRadius.lg)),
+                                child: Icon(Icons.check_rounded, size: 26, color: cs.onPrimaryContainer),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(child: Text('Invoice created', style: Theme.of(context).textTheme.titleLarge?.semiBold)),
+                            ],
+                          ),
+                          const SizedBox(height: 14),
+                          if (typedDraft != null)
+                            _buildBudgetSummary(
+                              context,
+                              draft: typedDraft,
+                              items: typedCartItems ?? const <CartItem>[],
+                            ),
+                          const SizedBox(height: 16),
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton.icon(
+                              // Navigate straight to the Invoice page (no extra payload)
+                              // so the user lands on the normal invoice list view.
+                              onPressed: () => context.go(AppRoutes.invoice),
+                              icon: Icon(Icons.open_in_new, color: cs.onPrimary),
+                              label: Text('Goto Invoice', style: TextStyle(color: cs.onPrimary)),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ],
+                  ),
                 ),
               ),
-            ),
-          ),
+            );
+          },
         ),
       ),
     );
