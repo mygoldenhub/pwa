@@ -922,9 +922,14 @@ class _XeroProductNamePickerSheet extends StatefulWidget {
 class _XeroProductNamePickerSheetState extends State<_XeroProductNamePickerSheet> {
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
+  final ScrollController _scrollController = ScrollController();
 
   String _query = '';
   bool _isLoading = false;
+  bool _isLoadingMore = false;
+  bool _hasMore = false;
+  int _offset = 0;
+  static const int _pageSize = 20;
   List<XeroProduct> _results = const [];
   Timer? _debounce;
 
@@ -933,6 +938,7 @@ class _XeroProductNamePickerSheetState extends State<_XeroProductNamePickerSheet
     super.initState();
     _controller.text = widget.initialQuery;
     _query = widget.initialQuery;
+    _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _focusNode.requestFocus();
@@ -945,29 +951,80 @@ class _XeroProductNamePickerSheetState extends State<_XeroProductNamePickerSheet
     _debounce?.cancel();
     _controller.dispose();
     _focusNode.dispose();
+    _scrollController
+      ..removeListener(_onScroll)
+      ..dispose();
     super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    if (_isLoading || _isLoadingMore || !_hasMore) return;
+    final pos = _scrollController.position;
+    if (pos.maxScrollExtent <= 0) return;
+    if (pos.pixels >= pos.maxScrollExtent - 240) {
+      _loadMore();
+    }
+  }
+
+  Future<void> _loadFirstPage() async {
+    final q = _query.trim();
+    if (q.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _results = const [];
+        _offset = 0;
+        _hasMore = false;
+        _isLoading = false;
+        _isLoadingMore = false;
+      });
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _isLoadingMore = false;
+      _offset = 0;
+      _hasMore = false;
+    });
+
+    final rows = await XeroProductService.searchByNamePrefixPaged(q, limit: _pageSize, offset: 0);
+    if (!mounted) return;
+    setState(() {
+      _results = rows;
+      _offset = rows.length;
+      _hasMore = rows.length == _pageSize;
+      _isLoading = false;
+    });
+  }
+
+  Future<void> _loadMore() async {
+    final q = _query.trim();
+    if (q.isEmpty || _isLoading || _isLoadingMore || !_hasMore) return;
+    setState(() => _isLoadingMore = true);
+    try {
+      final rows = await XeroProductService.searchByNamePrefixPaged(q, limit: _pageSize, offset: _offset);
+      if (!mounted) return;
+      setState(() {
+        // De-dupe by id (defensive; pagination should already avoid duplicates).
+        final seen = _results.map((e) => e.xeroItemId).toSet();
+        final appended = rows.where((r) => r.xeroItemId.isNotEmpty && seen.add(r.xeroItemId)).toList();
+        _results = [..._results, ...appended];
+        _offset += rows.length;
+        _hasMore = rows.length == _pageSize;
+      });
+    } catch (e) {
+      debugPrint('Product name picker loadMore failed: $e');
+    } finally {
+      if (mounted) setState(() => _isLoadingMore = false);
+    }
   }
 
   void _kickoffSearch() {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 220), () async {
-      final q = _query.trim();
       if (!mounted) return;
-      if (q.isEmpty) {
-        setState(() {
-          _results = const [];
-          _isLoading = false;
-        });
-        return;
-      }
-
-      setState(() => _isLoading = true);
-      final rows = await XeroProductService.searchByNamePrefix(q, limit: 10);
-      if (!mounted) return;
-      setState(() {
-        _results = rows;
-        _isLoading = false;
-      });
+      await _loadFirstPage();
     });
   }
 
@@ -1028,6 +1085,9 @@ class _XeroProductNamePickerSheetState extends State<_XeroProductNamePickerSheet
                               setState(() {
                                 _query = '';
                                 _results = const [];
+                                _offset = 0;
+                                _hasMore = false;
+                                _isLoadingMore = false;
                               });
                             },
                             icon: Icon(Icons.close, color: cs.onSurfaceVariant),
@@ -1052,11 +1112,20 @@ class _XeroProductNamePickerSheetState extends State<_XeroProductNamePickerSheet
                             key: const ValueKey('results'),
                             padding: EdgeInsets.zero,
                             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-                             primary: false,
+                            controller: _scrollController,
+                            primary: false,
                             physics: const BouncingScrollPhysics(),
-                            itemCount: _results.length,
+                            itemCount: _results.length + (_isLoadingMore ? 1 : 0),
                             separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm),
                             itemBuilder: (context, index) {
+                              if (index >= _results.length) {
+                                return Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+                                  child: Center(
+                                    child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary)),
+                                  ),
+                                );
+                              }
                               final p = _results[index];
                               return _XeroProductSuggestionTile(product: p, onTap: () => Navigator.of(context).pop(p));
                             },

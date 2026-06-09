@@ -26,13 +26,16 @@ class XeroProductService {
   static Future<List<Map<String, dynamic>>> _safeSearch(
     String like, {
     required int limit,
+    int offset = 0,
   }) async {
     Future<List<Map<String, dynamic>>> run(String select) async {
+      final from = offset.clamp(0, 1 << 31);
+      final to = (from + limit - 1).clamp(from, 1 << 31);
       final res = await SupabaseService.from(_table)
           .select(select)
           .ilike('name', like)
           .order('name', ascending: true)
-          .limit(limit);
+          .range(from, to);
       return (res as List).cast<Map<String, dynamic>>();
     }
 
@@ -63,6 +66,7 @@ class XeroProductService {
   static Future<List<Map<String, dynamic>>> _safeSearchAllTokens(
     List<String> tokens, {
     required int limit,
+    int offset = 0,
   }) async {
     if (tokens.isEmpty) return [];
 
@@ -72,7 +76,9 @@ class XeroProductService {
       for (final t in tokens) {
         q = q.ilike('name', '%$t%');
       }
-      final res = await q.order('name', ascending: true).limit(limit);
+      final from = offset.clamp(0, 1 << 31);
+      final to = (from + limit - 1).clamp(from, 1 << 31);
+      final res = await q.order('name', ascending: true).range(from, to);
       return (res as List).cast<Map<String, dynamic>>();
     }
 
@@ -168,6 +174,20 @@ class XeroProductService {
   /// This ensures that when a user types e.g. "MAPEI", the first suggestions
   /// are products that start with "MAPEI" (if any exist).
   static Future<List<XeroProduct>> searchByNamePrefix(String query, {int limit = 8}) async {
+    return searchByNamePrefixPaged(query, limit: limit, offset: 0);
+  }
+
+  /// Paginated variant of [searchByNamePrefix] used for infinite-scroll typeahead.
+  ///
+  /// Notes:
+  /// - Uses `range(offset, offset + limit - 1)` for paging.
+  /// - For multi-word queries, performs order-independent AND token matching.
+  /// - For single-word queries, uses a contains match (`%q%`) for stable pagination.
+  static Future<List<XeroProduct>> searchByNamePrefixPaged(
+    String query, {
+    int limit = 20,
+    int offset = 0,
+  }) async {
     final q = _normalizePhraseQuery(query);
     if (q.isEmpty) return [];
 
@@ -175,31 +195,20 @@ class XeroProductService {
     // Example: "ex se silicon travertine" should match names containing all
     // tokens, regardless of order.
     final tokens = _tokenizeQuery(q);
-    if (tokens.length >= 2) return _searchByAllTokens(tokens, limit: limit, rawQueryForDiagnostics: q);
+    if (tokens.length >= 2) {
+      return _searchByAllTokens(tokens, limit: limit, offset: offset, rawQueryForDiagnostics: q);
+    }
 
     try {
-      // PostgREST `or()` uses comma-separated filters.
-      // We intentionally do not escape %/_ here; users rarely type them and
-      // treating them as wildcards is acceptable for search UX.
-      final prefixLike = '${q}%';
+      // For paging stability we use a single contains match.
+      // Prefix-priority merging is intentionally skipped here because it makes
+      // offset-based pagination ambiguous (two differently offset lists).
       final containsLike = '%${q}%';
-
-      final prefixRows = await _safeSearch(prefixLike, limit: limit);
-      final prefixParsed = prefixRows
+      final rows = await _safeSearch(containsLike, limit: limit, offset: offset);
+      final merged = rows
           .map(XeroProduct.fromRow)
           .where((p) => p.xeroItemId.isNotEmpty && p.name.trim().isNotEmpty)
           .toList();
-
-      if (prefixParsed.length >= limit) return prefixParsed;
-
-      final remaining = limit - prefixParsed.length;
-      final containsRows = await _safeSearch(containsLike, limit: limit);
-      final containsParsed = containsRows
-          .map(XeroProduct.fromRow)
-          .where((p) => p.xeroItemId.isNotEmpty && p.name.trim().isNotEmpty)
-          .toList();
-
-      final merged = _mergeUniqueById(prefixParsed, containsParsed).take(limit).toList();
 
       // If we consistently get 0 results, it might be because:
       // - xero_sync_products hasn't populated the table yet, OR
@@ -218,10 +227,11 @@ class XeroProductService {
   static Future<List<XeroProduct>> _searchByAllTokens(
     List<String> tokens, {
     required int limit,
+    int offset = 0,
     required String rawQueryForDiagnostics,
   }) async {
     try {
-      final rows = await _safeSearchAllTokens(tokens, limit: limit);
+      final rows = await _safeSearchAllTokens(tokens, limit: limit, offset: offset);
       final parsed = rows
           .map(XeroProduct.fromRow)
           .where((p) => p.xeroItemId.isNotEmpty && p.name.trim().isNotEmpty)

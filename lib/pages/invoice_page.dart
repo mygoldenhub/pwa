@@ -30,6 +30,7 @@ class _InvoicePageState extends State<InvoicePage> {
   bool _skipNextRouteRefresh = true;
 
   bool _isLoadingInitial = true;
+  bool _isRefreshing = false;
   bool _isLoadingMore = false;
   bool _hasMore = true;
   Object? _loadError;
@@ -68,7 +69,7 @@ class _InvoicePageState extends State<InvoicePage> {
   void initState() {
     super.initState();
     _scrollController.addListener(_maybeLoadMore);
-    _loadInitial();
+    _loadInitial(showOverlayLoader: true);
   }
 
   @override
@@ -118,7 +119,7 @@ class _InvoicePageState extends State<InvoicePage> {
   }
 
   void _maybeLoadMore() {
-    if (!_hasMore || _isLoadingMore || _isLoadingInitial) return;
+    if (!_hasMore || _isLoadingMore || _isLoadingInitial || _isRefreshing) return;
     final pos = _scrollController.position;
     if (!pos.hasPixels || !pos.hasContentDimensions) return;
     if (pos.pixels >= pos.maxScrollExtent - 240) {
@@ -126,9 +127,9 @@ class _InvoicePageState extends State<InvoicePage> {
     }
   }
 
-  Future<void> _loadInitial() async {
+  Future<void> _loadInitial({required bool showOverlayLoader}) async {
     setState(() {
-      _isLoadingInitial = true;
+      _isLoadingInitial = showOverlayLoader;
       _loadError = null;
       _hasMore = true;
       _invoices.clear();
@@ -179,7 +180,16 @@ class _InvoicePageState extends State<InvoicePage> {
   }
 
   Future<void> _refresh() async {
-    await _loadInitial();
+    setState(() {
+      _isRefreshing = true;
+      _loadError = null;
+    });
+    try {
+      await _loadInitial(showOverlayLoader: false);
+    } finally {
+      if (!mounted) return;
+      setState(() => _isRefreshing = false);
+    }
   }
 
   String? _extractInvoiceUrl(Object? webhook) {
@@ -314,28 +324,31 @@ class _InvoicePageState extends State<InvoicePage> {
     );
   }
 
-  String _fmtBudget(XeroInvoice inv) {
+  String _fmtTotalBudget(XeroInvoice inv) {
     final currency = (inv.currencyCode ?? '').trim();
-    // Treat “budget” as the amount still due; fall back to totals if needed.
-    final amount = inv.amountDue ?? inv.total ?? inv.subTotal;
+    final amount = inv.total ?? inv.subTotal ?? inv.amountDue;
     if (amount == null) return '-';
     final v = amount.toStringAsFixed(2);
     return currency.isEmpty ? v : '$v $currency';
+  }
+
+  String _fmtTotalPaidBudget(XeroInvoice inv) {
+    final currency = (inv.currencyCode ?? '').trim();
+    final total = inv.total ?? inv.subTotal;
+    final paid = inv.amountPaid;
+    if (total == null && paid == null) return '-';
+
+    final totalText = (total ?? 0).toStringAsFixed(2);
+    final paidText = (paid ?? 0).toStringAsFixed(2);
+    final combined = '$totalText / $paidText';
+    return currency.isEmpty ? combined : '$combined $currency';
   }
 
   Widget _buildInvoiceList(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
 
-    if (_isLoadingInitial) {
-      // Match the Cart page loading behavior for consistency.
-      return const SizedBox(
-        height: 220,
-        child: Center(
-          child: CircularProgressIndicator(),
-        ),
-      );
-    }
+    if (_isLoadingInitial && _invoices.isEmpty) return const SizedBox.shrink();
 
     if (_loadError != null && _invoices.isEmpty) {
       return Container(
@@ -358,7 +371,7 @@ class _InvoicePageState extends State<InvoicePage> {
             ),
             const SizedBox(height: AppSpacing.md),
             OutlinedButton.icon(
-              onPressed: _loadInitial,
+              onPressed: () => _loadInitial(showOverlayLoader: true),
               icon: Icon(Icons.refresh, color: cs.primary),
               label: Text('Retry', style: textTheme.titleSmall?.withColor(cs.primary)),
             ),
@@ -390,7 +403,7 @@ class _InvoicePageState extends State<InvoicePage> {
         for (final inv in _invoices) ...[
           InvoiceCard(
             invoice: inv,
-            budgetText: _fmtBudget(inv),
+            budgetText: _fmtTotalBudget(inv),
             statusPill: _buildStatusPill(context, inv.status),
             onTap: () => _openInvoiceDetails(inv),
           ),
@@ -423,7 +436,8 @@ class _InvoicePageState extends State<InvoicePage> {
   }
 
   Future<void> _openInvoiceDetails(XeroInvoice invoice) async {
-    final budgetText = _fmtBudget(invoice);
+    // In the detail modal, show Total / Paid.
+    final budgetText = _fmtTotalPaidBudget(invoice);
     final statusPill = _buildStatusPill(context, invoice.status);
     await showDialog<void>(
       context: context,
@@ -439,38 +453,58 @@ class _InvoicePageState extends State<InvoicePage> {
     return Scaffold(
       appBar: const AppImpactHeader(title: 'Invoice'),
       body: SafeArea(
-        child: RefreshIndicator(
-          onRefresh: _refresh,
-          child: ListView(
-            controller: _scrollController,
-            padding: AppSpacing.paddingLg,
-            children: [
-              Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 980),
-                  child: Column(
-                    children: [
-                      if (typedDraft != null) ...[
-                        _buildDraftCard(context, typedDraft),
-                        const SizedBox(height: AppSpacing.lg),
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: FilledButton.icon(
-                            onPressed: () => _gotoInvoice(context, widget.webhook),
-                            icon: Icon(Icons.open_in_new, color: cs.onPrimary),
-                            label: Text('Goto Invoice', style: Theme.of(context).textTheme.titleSmall?.withColor(cs.onPrimary)),
-                          ),
-                        ),
-                        const SizedBox(height: AppSpacing.lg),
-                      ],
-                      _buildInvoiceList(context),
-                      const SizedBox(height: AppSpacing.xxl),
-                    ],
+        child: Stack(
+          children: [
+            RefreshIndicator(
+              onRefresh: _refresh,
+              child: ListView(
+                controller: _scrollController,
+                padding: AppSpacing.paddingLg,
+                children: [
+                  Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 980),
+                      child: Column(
+                        children: [
+                          if (typedDraft != null) ...[
+                            _buildDraftCard(context, typedDraft),
+                            const SizedBox(height: AppSpacing.lg),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: FilledButton.icon(
+                                onPressed: () => _gotoInvoice(context, widget.webhook),
+                                icon: Icon(Icons.open_in_new, color: cs.onPrimary),
+                                label: Text('Goto Invoice', style: Theme.of(context).textTheme.titleSmall?.withColor(cs.onPrimary)),
+                              ),
+                            ),
+                            const SizedBox(height: AppSpacing.lg),
+                          ],
+                          _buildInvoiceList(context),
+                          const SizedBox(height: AppSpacing.xxl),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (_isLoadingInitial)
+              Positioned.fill(
+                child: AbsorbPointer(
+                  absorbing: true,
+                  child: ColoredBox(
+                    color: cs.surface.withValues(alpha: 0.55),
+                    child: Center(
+                      child: SizedBox(
+                        width: 36,
+                        height: 36,
+                        child: CircularProgressIndicator(color: cs.primary, strokeWidth: 3),
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ],
-          ),
+          ],
         ),
       ),
     );
