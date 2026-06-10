@@ -149,11 +149,11 @@ class _NewInvoiceSheetState extends State<NewInvoiceSheet> {
               Row(
                 children: [
                   Expanded(
-                    child: _ReadOnlyInputField(label: 'Date', value: _fmtDate(_date), prefixIcon: Icons.event),
+                    child: _ReadOnlyInputField(label: 'Date', value: _fmtDate(_date)),
                   ),
                   const SizedBox(width: AppSpacing.md),
                   Expanded(
-                    child: _ReadOnlyInputField(label: 'Due date', value: _fmtDate(_dueDate), prefixIcon: Icons.event_available),
+                    child: _ReadOnlyInputField(label: 'Due date', value: _fmtDate(_dueDate)),
                   ),
                 ],
               ),
@@ -216,9 +216,9 @@ class _ReadOnlyMetricField extends StatelessWidget {
 class _ReadOnlyInputField extends StatelessWidget {
   final String label;
   final String value;
-  final IconData prefixIcon;
+  final IconData? prefixIcon;
 
-  const _ReadOnlyInputField({required this.label, required this.value, required this.prefixIcon});
+  const _ReadOnlyInputField({required this.label, required this.value, this.prefixIcon});
 
   @override
   Widget build(BuildContext context) {
@@ -226,7 +226,7 @@ class _ReadOnlyInputField extends StatelessWidget {
     return InputDecorator(
       decoration: InputDecoration(
         labelText: label,
-        prefixIcon: Icon(prefixIcon),
+        prefixIcon: prefixIcon != null ? Icon(prefixIcon) : null,
       ),
       child: Text(value, style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurface)),
     );

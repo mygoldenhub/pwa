@@ -32,7 +32,7 @@ class InvoiceSuccessPage extends StatelessWidget {
 
   Widget _buildBudgetSummary(BuildContext context, {required InvoiceDraft draft, required List<CartItem> items}) {
     final cs = Theme.of(context).colorScheme;
-    String fmt(DateTime d) => '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    String fmt(DateTime d) => '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year.toString().padLeft(4, '0')}';
 
     final total = draft.totalBudgetCents / 100.0;
     final totals = _computeTotals(total: total, lineAmountType: draft.lineAmountType);
@@ -159,7 +159,7 @@ class InvoiceSuccessPage extends StatelessWidget {
           const SizedBox(height: 12),
           Container(height: 1, color: cs.outline.withValues(alpha: 0.12)),
           const SizedBox(height: 12),
-          _CompactAmountRow(description: 'Budget', value: '${draft.currencyCode} ${money(total)}'),
+          _CompactAmountRow(description: 'Total', value: '${draft.currencyCode} ${money(total)}'),
           const SizedBox(height: 8),
           _CompactAmountRow(description: taxLabel, value: '${draft.currencyCode} ${money(totals.gst)}'),
           const SizedBox(height: 10),
@@ -238,7 +238,7 @@ class InvoiceSuccessPage extends StatelessWidget {
                               // so the user lands on the normal invoice list view.
                               onPressed: () => context.go(AppRoutes.invoice),
                               icon: Icon(Icons.open_in_new, color: cs.onPrimary),
-                              label: Text('Goto Invoice to confirm.', style: TextStyle(color: cs.onPrimary)),
+                              label: Text('Just confirm👍', style: TextStyle(color: cs.onPrimary)),
                             ),
                           ),
                         ],
