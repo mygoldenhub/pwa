@@ -114,7 +114,7 @@ class _InvoicePageState extends State<InvoicePage> {
     // Whenever we navigate back to the Invoice page, refresh the list so users
     // always see the latest Supabase updates.
     if (isInvoice && !wasInvoice) {
-      _refresh();
+      _refresh(showOverlayLoader: true);
     }
   }
 
@@ -127,12 +127,20 @@ class _InvoicePageState extends State<InvoicePage> {
     }
   }
 
-  Future<void> _loadInitial({required bool showOverlayLoader}) async {
+  Future<void> _loadInitial({required bool showOverlayLoader, bool clearExisting = true}) async {
     setState(() {
-      _isLoadingInitial = showOverlayLoader;
+      // If there is no data on screen yet, always show the full-screen loader
+      // while the first page is being fetched.
+      //
+      // Otherwise, only show the overlay when explicitly requested (e.g. when
+      // navigating back to the page). This prevents a "double loader" effect
+      // during pull-to-refresh.
+      final willHaveNoData = clearExisting ? true : _invoices.isEmpty;
+      _isLoadingInitial = showOverlayLoader || willHaveNoData;
       _loadError = null;
       _hasMore = true;
-      _invoices.clear();
+      _isLoadingMore = false;
+      if (clearExisting) _invoices.clear();
       _nextOffset = 0;
     });
 
@@ -141,7 +149,17 @@ class _InvoicePageState extends State<InvoicePage> {
       if (!mounted) return;
       setState(() {
         _nextOffset = page.length;
-        _mergeInvoicesUnique(page);
+
+        // When we're refreshing without an overlay (pull-to-refresh), keep the
+        // existing list visible until the new data arrives, then replace.
+        if (!clearExisting) {
+          _invoices
+            ..clear()
+            ..addAll(page);
+        } else {
+          _mergeInvoicesUnique(page);
+        }
+
         _sortInvoicesByUpdatedDateUtc();
         _hasMore = page.length == _pageSize;
       });
@@ -179,13 +197,22 @@ class _InvoicePageState extends State<InvoicePage> {
     }
   }
 
-  Future<void> _refresh() async {
+  Future<void> _refresh({required bool showOverlayLoader}) async {
+    // Two distinct refresh modes:
+    // - Pull-to-refresh: show ONLY the RefreshIndicator spinner.
+    // - Route/navigation refresh: show ONLY the full-screen overlay loader.
+    if (showOverlayLoader) {
+      setState(() => _loadError = null);
+      await _loadInitial(showOverlayLoader: true, clearExisting: true);
+      return;
+    }
+
     setState(() {
       _isRefreshing = true;
       _loadError = null;
     });
     try {
-      await _loadInitial(showOverlayLoader: false);
+      await _loadInitial(showOverlayLoader: false, clearExisting: false);
     } finally {
       if (!mounted) return;
       setState(() => _isRefreshing = false);
@@ -456,7 +483,7 @@ class _InvoicePageState extends State<InvoicePage> {
         child: Stack(
           children: [
             RefreshIndicator(
-              onRefresh: _refresh,
+              onRefresh: () => _refresh(showOverlayLoader: false),
               child: ListView(
                 controller: _scrollController,
                 padding: AppSpacing.paddingLg,
