@@ -91,6 +91,9 @@ class InvoiceWebhookService {
           .timeout(const Duration(seconds: 25));
 
       final ok = res.statusCode >= 200 && res.statusCode < 300;
+      debugPrint('--------Invoice ID--------');
+      debugPrint('$res');
+      debugPrint('--------Invoice ID--------');
       if (!ok) {
         debugPrint('InvoiceWebhookService.createInvoice failed: status=${res.statusCode} body=${res.body}');
         throw 'Webhook failed (${res.statusCode}). ${res.body.isEmpty ? 'No response body.' : res.body}';
@@ -99,6 +102,10 @@ class InvoiceWebhookService {
       dynamic decoded;
       try {
         decoded = jsonDecode(utf8.decode(res.bodyBytes));
+        debugPrint('--------Invoice ID(decoded)--------');
+        debugPrint('$decoded');
+        debugPrint('--------Invoice ID--------');
+
       } catch (_) {
         decoded = utf8.decode(res.bodyBytes);
       }

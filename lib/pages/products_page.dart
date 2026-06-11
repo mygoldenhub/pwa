@@ -327,14 +327,6 @@ class _ProductsPageState extends State<ProductsPage> {
     await _createInvoice(draft: draft, cartItems: cartItems);
   }
 
-  String? _extractInvoiceId(dynamic webhookBody) {
-    if (webhookBody is! Map) return null;
-    final map = Map<String, dynamic>.from(webhookBody as Map);
-    final raw = map['invoice_id'] ?? map['invoiceId'] ?? map['InvoiceID'] ?? map['id'] ?? map['ID'];
-    final s = raw?.toString().trim();
-    return (s == null || s.isEmpty) ? null : s;
-  }
-
   Future<bool> _confirmPayNow() async {
     final cs = Theme.of(context).colorScheme;
     final choice = await showDialog<bool>(
@@ -552,14 +544,14 @@ class _ProductsPageState extends State<ProductsPage> {
       }
 
       // Navigate to a success page (after webhook success + cart clear).
-      final createdInvoiceId = _extractInvoiceId(result.body);
-      if (createdInvoiceId == null) {
-        debugPrint('Invoice created but webhook response did not include invoice id. body=${result.body}');
-        // Fallback: keep previous behavior, but refresh will not be able to load invoice data.
-        context.go(AppRoutes.invoiceSuccessBase, extra: {'draft': draft, 'webhook': result.body, 'cartItems': cartItems});
-      } else {
-        context.go(AppRoutes.invoiceSuccess(createdInvoiceId), extra: {'draft': draft, 'webhook': result.body, 'cartItems': cartItems});
+      final createdInvoiceId = result.body;
+      debugPrint('--------createdInvoiceId--------');
+      debugPrint('$createdInvoiceId');
+      debugPrint('--------createdInvoiceId--------');
+      if (createdInvoiceId == null || createdInvoiceId.toString().trim().isEmpty) {
+        throw Exception('Invoice was created, but no invoice id was returned from the webhook.');
       }
+      context.go(AppRoutes.invoiceSuccess(createdInvoiceId));
     } catch (e) {
       if (!mounted) return;
       context.pop(); // close loading
