@@ -552,7 +552,14 @@ class _ProductsPageState extends State<ProductsPage> {
       }
 
       // Navigate to a success page (after webhook success + cart clear).
-      context.go(AppRoutes.invoiceSuccess, extra: {'draft': draft, 'webhook': result.body, 'cartItems': cartItems});
+      final createdInvoiceId = _extractInvoiceId(result.body);
+      if (createdInvoiceId == null) {
+        debugPrint('Invoice created but webhook response did not include invoice id. body=${result.body}');
+        // Fallback: keep previous behavior, but refresh will not be able to load invoice data.
+        context.go(AppRoutes.invoiceSuccessBase, extra: {'draft': draft, 'webhook': result.body, 'cartItems': cartItems});
+      } else {
+        context.go(AppRoutes.invoiceSuccess(createdInvoiceId), extra: {'draft': draft, 'webhook': result.body, 'cartItems': cartItems});
+      }
     } catch (e) {
       if (!mounted) return;
       context.pop(); // close loading

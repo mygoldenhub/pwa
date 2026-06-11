@@ -142,10 +142,20 @@ class AppRouter {
                   },
                   routes: [
                     GoRoute(
+                      // Backward-compatible route (older builds navigated here without an invoice id).
                       path: 'success',
                       pageBuilder: (context, state) {
                         final extra = (state.extra is Map) ? (state.extra as Map) : const <String, dynamic>{};
-                        return MaterialPage(child: InvoiceSuccessPage(draft: extra['draft'], webhook: extra['webhook'], cartItems: extra['cartItems']));
+                        return MaterialPage(child: InvoiceSuccessPage(invoiceId: null, draft: extra['draft'], webhook: extra['webhook'], cartItems: extra['cartItems']));
+                      },
+                    ),
+                    GoRoute(
+                      // Preferred: invoice id in the URL so a refresh can reload the invoice.
+                      path: 'success/:invoiceId',
+                      pageBuilder: (context, state) {
+                        final extra = (state.extra is Map) ? (state.extra as Map) : const <String, dynamic>{};
+                        final invoiceId = state.pathParameters['invoiceId'];
+                        return MaterialPage(child: InvoiceSuccessPage(invoiceId: invoiceId, draft: extra['draft'], webhook: extra['webhook'], cartItems: extra['cartItems']));
                       },
                     ),
                   ],
@@ -181,7 +191,10 @@ class AppRoutes {
 
   static const String cart = '/app/cart';
   static const String invoice = '/app/invoice';
-  static const String invoiceSuccess = '/app/invoice/success';
+  /// Success page base path.
+  /// Prefer [invoiceSuccess] to include the invoice id in the URL so refresh/deep-link works.
+  static const String invoiceSuccessBase = '/app/invoice/success';
+  static String invoiceSuccess(String invoiceId) => '/app/invoice/success/${Uri.encodeComponent(invoiceId)}';
   static const String account = '/app/account';
 
   static const String barcodeScan = '/app/cart/scan';
