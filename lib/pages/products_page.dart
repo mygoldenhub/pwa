@@ -11,8 +11,10 @@ import 'package:pwa/models/xero_product.dart';
 import 'package:pwa/nav.dart';
 import 'package:pwa/services/cart_service.dart';
 import 'package:pwa/services/invoice_webhook_service.dart';
+import 'package:pwa/services/stripe_checkout_service.dart';
 import 'package:pwa/services/xero_product_service.dart';
 import 'package:pwa/theme.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class ProductsPage extends StatefulWidget {
   final AppState appState;
@@ -312,7 +314,173 @@ class _ProductsPageState extends State<ProductsPage> {
     );
     if (!mounted || draft == null) return;
 
+    // Requirement: Ask “Pay now?” immediately after the user taps Create,
+    // without running the invoice-creation logic first.
+    final payNow = await _confirmPayNow();
+    if (!mounted) return;
+
+    if (payNow) {
+      await _startStripeCheckout(draft: draft, cartItems: cartItems);
+      return;
+    }
+
     await _createInvoice(draft: draft, cartItems: cartItems);
+  }
+
+  String? _extractInvoiceId(dynamic webhookBody) {
+    if (webhookBody is! Map) return null;
+    final map = Map<String, dynamic>.from(webhookBody as Map);
+    final raw = map['invoice_id'] ?? map['invoiceId'] ?? map['InvoiceID'] ?? map['id'] ?? map['ID'];
+    final s = raw?.toString().trim();
+    return (s == null || s.isEmpty) ? null : s;
+  }
+
+  Future<bool> _confirmPayNow() async {
+    final cs = Theme.of(context).colorScheme;
+    final choice = await showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: cs.scrim.withValues(alpha: 0.52),
+      builder: (context) => AppCenteredModalDialog(
+        child: AppModalSurface(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(color: cs.secondaryContainer, borderRadius: BorderRadius.circular(AppRadius.lg)),
+                    child: Icon(Icons.payments_outlined, color: cs.onSecondaryContainer),
+                  ),
+                  const SizedBox(width: AppSpacing.md),
+                  Expanded(child: Text('Pay now?', style: Theme.of(context).textTheme.titleLarge?.semiBold)),
+                  IconButton(
+                    tooltip: 'Close',
+                    onPressed: () => Navigator.of(context).pop(false),
+                    icon: Icon(Icons.close, color: cs.onSurfaceVariant),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                'Choose Now to pay instantly, or Later to pay at your convenience.',
+                style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: () => Navigator.of(context).pop(true),
+                      icon: Icon(Icons.lock_outline, color: cs.onPrimary),
+                      label: Text('Now', style: TextStyle(color: cs.onPrimary)),
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.md),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => Navigator.of(context).pop(false),
+                      icon: Icon(Icons.schedule, color: cs.onSurface),
+                      label: Text('Later', style: TextStyle(color: cs.onSurface)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    return choice ?? false;
+  }
+
+  Future<void> _launchCheckoutUrl(Uri url) async {
+    try {
+      final ok = await launchUrl(url, mode: LaunchMode.externalApplication);
+      if (!ok) throw 'Could not open Stripe Checkout.';
+    } catch (e) {
+      debugPrint('Failed to launch Stripe checkout URL: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> _startStripeCheckout({required InvoiceDraft draft, required List<CartItem> cartItems}) async {
+    final cs = Theme.of(context).colorScheme;
+
+    // Small blocking progress dialog.
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: cs.scrim.withValues(alpha: 0.52),
+      builder: (context) => const AppCenteredModalDialog(
+        child: AppModalSurface(
+          child: Row(
+            children: [
+              SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5)),
+              SizedBox(width: AppSpacing.md),
+              Expanded(child: Text('Opening Stripe Checkout…')),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final currency = draft.currencyCode;
+      final lineItems = cartItems
+          .where((c) => c.productName.trim().isNotEmpty)
+          .map((c) => (name: c.productName.trim(), unitAmountCents: c.unitPriceCents ?? 0, quantity: c.quantity))
+          .toList();
+
+      final checkoutUrl = await StripeCheckoutService.createHostedCheckoutUrl(
+        currency: currency,
+        reference: draft.reference,
+        invoiceId: null,
+        lineItems: lineItems,
+        customerEmail: widget.appState.auth.currentUser?.email,
+      );
+
+      if (!mounted) return;
+      context.pop(); // close loading
+
+      try {
+        await CartService.clearMyCart();
+      } catch (e) {
+        debugPrint('Failed to clear cart before Stripe checkout: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+            ..hideCurrentSnackBar()
+            ..showSnackBar(
+              SnackBar(
+                behavior: SnackBarBehavior.floating,
+                showCloseIcon: true,
+                margin: const EdgeInsets.all(AppSpacing.lg),
+                content: const Text('Payment started, but failed to clear your cart. You may see the items still in Cart until refresh.'),
+              ),
+            );
+        }
+      }
+
+      await _launchCheckoutUrl(checkoutUrl);
+    } catch (e) {
+      debugPrint('_startStripeCheckout failed: $e');
+      if (mounted) {
+        context.pop(); // close loading
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              behavior: SnackBarBehavior.floating,
+              showCloseIcon: true,
+              margin: const EdgeInsets.all(AppSpacing.lg),
+              content: Text('Failed to start Stripe Checkout: ${e.toString()}'),
+            ),
+          );
+      }
+    }
   }
 
   Future<void> _createInvoice({required InvoiceDraft draft, required List<CartItem> cartItems}) async {
