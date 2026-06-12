@@ -25,6 +25,7 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
   bool _openedOnce = false;
   bool _postingInvoice = false;
   bool _postedInvoice = false;
+  String? _createdInvoiceId;
 
   @override
   void initState() {
@@ -82,8 +83,9 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
       }
       await PendingInvoiceStorage.clear();
       _postedInvoice = true;
+      _createdInvoiceId = createdInvoiceId.toString().trim();
       if (!mounted) return;
-      context.go(AppRoutes.invoiceSuccess(createdInvoiceId.toString()));
+      setState(() {});
     } catch (e) {
       debugPrint('StripeCheckoutSuccessPage: posting pending invoice failed: $e');
       if (mounted) {
@@ -92,6 +94,20 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
     } finally {
       if (mounted) setState(() => _postingInvoice = false);
     }
+  }
+
+  Future<void> _openCreatedInvoice() async {
+    // Ensure we have an invoice id (try to post if it hasn't happened yet).
+    if (_createdInvoiceId == null) {
+      await _postPendingInvoiceIfNeeded();
+    }
+    final id = _createdInvoiceId?.trim() ?? '';
+    if (!mounted) return;
+    if (id.isEmpty) {
+      setState(() => _error = _error ?? 'Invoice is not ready yet. Please wait a moment and try again.');
+      return;
+    }
+    context.go(AppRoutes.invoiceSuccess(id));
   }
 
   @override
@@ -105,7 +121,7 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
         actions: [
           IconButton(
             tooltip: 'Close',
-            onPressed: () => context.go(AppRoutes.cart),
+            onPressed: () => context.go(AppRoutes.invoice),
             icon: Icon(Icons.close, color: cs.onSurface),
           ),
         ],
@@ -176,18 +192,21 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
                               const SizedBox(width: AppSpacing.md),
                               Expanded(
                                 child: OutlinedButton.icon(
-                                  onPressed: _load,
-                                  icon: Icon(Icons.refresh, color: cs.onSurface),
-                                  label: Text('Refresh', style: TextStyle(color: cs.onSurface)),
+                                  onPressed: _postingInvoice ? null : _openCreatedInvoice,
+                                  icon: Icon(Icons.receipt_long_outlined, color: cs.onSurface),
+                                  label: Text(
+                                    _createdInvoiceId == null ? 'Open Invoice' : 'Open Invoice',
+                                    style: TextStyle(color: cs.onSurface),
+                                  ),
                                 ),
                               ),
                             ],
                           ),
                           const SizedBox(height: AppSpacing.md),
                           OutlinedButton.icon(
-                            onPressed: () => context.go(AppRoutes.cart),
-                            icon: Icon(Icons.shopping_cart_outlined, color: cs.onSurface),
-                            label: Text('Back to Cart', style: TextStyle(color: cs.onSurface)),
+                            onPressed: () => context.go(AppRoutes.invoice),
+                            icon: Icon(Icons.request_quote_outlined, color: cs.onSurface),
+                            label: Text('Back to Invoice', style: TextStyle(color: cs.onSurface)),
                           ),
                         ],
                       ),
