@@ -319,6 +319,9 @@ class _ProductsPageState extends State<ProductsPage> {
     final payNow = await _confirmPayNow();
     if (!mounted) return;
 
+    // If user closes the dialog (X or tap outside), do nothing.
+    if (payNow == null) return;
+
     if (payNow) {
       await _startStripeCheckout(draft: draft, cartItems: cartItems);
       return;
@@ -327,9 +330,9 @@ class _ProductsPageState extends State<ProductsPage> {
     await _createInvoice(draft: draft, cartItems: cartItems);
   }
 
-  Future<bool> _confirmPayNow() async {
+  Future<bool?> _confirmPayNow() async {
     final cs = Theme.of(context).colorScheme;
-    final choice = await showDialog<bool>(
+    final choice = await showDialog<bool?>(
       context: context,
       barrierDismissible: true,
       barrierColor: cs.scrim.withValues(alpha: 0.52),
@@ -351,7 +354,7 @@ class _ProductsPageState extends State<ProductsPage> {
                   Expanded(child: Text('Pay now?', style: Theme.of(context).textTheme.titleLarge?.semiBold)),
                   IconButton(
                     tooltip: 'Close',
-                    onPressed: () => Navigator.of(context).pop(false),
+                    onPressed: () => Navigator.of(context).pop(null),
                     icon: Icon(Icons.close, color: cs.onSurfaceVariant),
                   ),
                 ],
@@ -386,7 +389,7 @@ class _ProductsPageState extends State<ProductsPage> {
         ),
       ),
     );
-    return choice ?? false;
+    return choice;
   }
 
   Future<void> _launchCheckoutUrl(Uri url) async {

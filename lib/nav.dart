@@ -15,6 +15,7 @@ import 'package:pwa/pages/verify_email_code_page.dart';
 import 'package:pwa/pages/welcome_page.dart';
 import 'package:pwa/pages/xero_product_detail_page.dart';
 import 'package:pwa/pages/product_form_page.dart';
+import 'package:pwa/pages/stripe_checkout_success_page.dart';
 
 /// GoRouter configuration for app navigation
 ///
@@ -164,6 +165,15 @@ class AppRouter {
             ),
           ],
         ),
+
+        // Stripe redirect return page (hosted checkout -> success_url)
+        GoRoute(
+          path: AppRoutes.stripeCheckoutSuccess,
+          pageBuilder: (context, state) {
+            final sessionId = state.uri.queryParameters['session_id'] ?? '';
+            return MaterialPage(child: StripeCheckoutSuccessPage(sessionId: sessionId));
+          },
+        ),
       ],
     );
   }
@@ -183,6 +193,8 @@ class AppRoutes {
   static const String invoice = '/app/invoice';
   static String invoiceSuccess(String invoiceId) => '/app/invoice/success/${Uri.encodeComponent(invoiceId)}';
   static const String account = '/app/account';
+
+  static const String stripeCheckoutSuccess = '/app/stripe/success';
 
   static const String barcodeScan = '/app/cart/scan';
   static const String productNew = '/app/cart/new';

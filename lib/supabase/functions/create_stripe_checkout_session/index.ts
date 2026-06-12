@@ -58,8 +58,10 @@ Deno.serve(async (req) => {
     const currency = (payload.currency ?? "AUD").toLowerCase();
 
     const baseUrl = pickBaseUrl(req);
-    const inferredSuccess = baseUrl ? `${baseUrl}/#/invoice` : null;
-    const inferredCancel = baseUrl ? `${baseUrl}/#/cart` : null;
+    // Bring the user back into the app after payment so we can show the Stripe receipt/invoice.
+    // NOTE: go_router is hash-based on web here, so we use /#/...
+    const inferredSuccess = baseUrl ? `${baseUrl}/#/app/stripe/success?session_id={CHECKOUT_SESSION_ID}` : null;
+    const inferredCancel = baseUrl ? `${baseUrl}/#/app/cart` : null;
 
     const successUrl = payload.successUrl?.trim() || inferredSuccess;
     const cancelUrl = payload.cancelUrl?.trim() || inferredCancel;

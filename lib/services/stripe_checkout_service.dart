@@ -3,6 +3,17 @@ import 'package:pwa/supabase/supabase_config.dart';
 
 class StripeCheckoutService {
   static const String _fn = 'create_stripe_checkout_session';
+  static const String _receiptFn = 'get_stripe_checkout_receipt';
+
+  static ({Uri? receiptUrl, Uri? hostedInvoiceUrl}) _parseReceiptResponse(dynamic data) {
+    if (data is! Map) return (receiptUrl: null, hostedInvoiceUrl: null);
+    final receipt = data['receiptUrl']?.toString();
+    final invoice = data['hostedInvoiceUrl']?.toString();
+    return (
+      receiptUrl: (receipt != null && receipt.trim().isNotEmpty) ? Uri.tryParse(receipt.trim()) : null,
+      hostedInvoiceUrl: (invoice != null && invoice.trim().isNotEmpty) ? Uri.tryParse(invoice.trim()) : null,
+    );
+  }
 
   /// Creates a Stripe hosted checkout session and returns its URL.
   static Future<Uri> createHostedCheckoutUrl({
@@ -40,6 +51,20 @@ class StripeCheckoutService {
       return Uri.parse(url);
     } catch (e) {
       debugPrint('StripeCheckoutService.createHostedCheckoutUrl failed: $e');
+      rethrow;
+    }
+  }
+
+  /// After Stripe redirects back to the app (success_url), fetch the receipt/invoice URL.
+  ///
+  /// - [hostedInvoiceUrl] is present only if Stripe invoice creation is enabled.
+  /// - [receiptUrl] is usually present for standard one-off payments.
+  static Future<({Uri? receiptUrl, Uri? hostedInvoiceUrl})> getReceiptUrls({required String sessionId}) async {
+    try {
+      final res = await SupabaseConfig.client.functions.invoke(_receiptFn, body: {'sessionId': sessionId});
+      return _parseReceiptResponse(res.data);
+    } catch (e) {
+      debugPrint('StripeCheckoutService.getReceiptUrls failed: $e');
       rethrow;
     }
   }
