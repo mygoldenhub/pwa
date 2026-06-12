@@ -76,7 +76,7 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
 
     setState(() => _postingInvoice = true);
     try {
-      final res = await InvoiceWebhookService.submitInvoicePayload(payload);
+      final res = await InvoiceWebhookService.submitInvoicePayload(payload, markPaid: true);
       final createdInvoiceId = res.body;
       if (createdInvoiceId == null || createdInvoiceId.toString().trim().isEmpty) {
         throw Exception('Invoice webhook succeeded, but no invoice id was returned.');
@@ -176,10 +176,13 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
                             Text('Error: $_error', style: Theme.of(context).textTheme.bodySmall?.withColor(cs.error)),
                           ],
                           const SizedBox(height: AppSpacing.lg),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: FilledButton.icon(
+                          Center(
+                            child: Wrap(
+                              alignment: WrapAlignment.center,
+                              spacing: AppSpacing.md,
+                              runSpacing: AppSpacing.sm,
+                              children: [
+                                FilledButton.icon(
                                   onPressed: best == null
                                       ? null
                                       : () async {
@@ -188,25 +191,18 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
                                   icon: Icon(Icons.open_in_new, color: cs.onPrimary),
                                   label: Text('Open Stripe invoice', style: TextStyle(color: cs.onPrimary)),
                                 ),
-                              ),
-                              const SizedBox(width: AppSpacing.md),
-                              Expanded(
-                                child: OutlinedButton.icon(
+                                OutlinedButton.icon(
                                   onPressed: _postingInvoice ? null : _openCreatedInvoice,
                                   icon: Icon(Icons.receipt_long_outlined, color: cs.onSurface),
-                                  label: Text(
-                                    _createdInvoiceId == null ? 'Open Invoice' : 'Open Invoice',
-                                    style: TextStyle(color: cs.onSurface),
-                                  ),
+                                  label: Text('Open Invoice', style: TextStyle(color: cs.onSurface)),
                                 ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: AppSpacing.md),
-                          OutlinedButton.icon(
-                            onPressed: () => context.go(AppRoutes.invoice),
-                            icon: Icon(Icons.request_quote_outlined, color: cs.onSurface),
-                            label: Text('Back to Invoice', style: TextStyle(color: cs.onSurface)),
+                                OutlinedButton.icon(
+                                  onPressed: () => context.go(AppRoutes.invoice),
+                                  icon: Icon(Icons.request_quote_outlined, color: cs.onSurface),
+                                  label: Text('Back to Invoice', style: TextStyle(color: cs.onSurface)),
+                                ),
+                              ],
+                            ),
                           ),
                         ],
                       ),

@@ -86,8 +86,16 @@ class InvoiceWebhookService {
   ///
   /// This is used by the "Pay now" flow: we store the cart/draft payload before
   /// Stripe checkout, then post it after Stripe returns successfully.
-  static Future<InvoiceWebhookResult> submitInvoicePayload(Map<String, dynamic> payload) async {
+  static Future<InvoiceWebhookResult> submitInvoicePayload(
+    Map<String, dynamic> payload, {
+    bool markPaid = false,
+  }) async {
     final uri = _webhookUri();
+
+    final effectivePayload = <String, dynamic>{
+      ...payload,
+      if (markPaid) 'pay': 'paid',
+    };
 
     try {
       final res = await http
@@ -97,7 +105,7 @@ class InvoiceWebhookService {
               'content-type': 'application/json; charset=utf-8',
               'accept': 'application/json',
             },
-            body: jsonEncode(payload),
+            body: jsonEncode(effectivePayload),
           )
           .timeout(const Duration(seconds: 25));
 
