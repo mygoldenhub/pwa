@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/nav.dart';
+import 'package:pwa/services/cart_service.dart';
 import 'package:pwa/services/invoice_webhook_service.dart';
 import 'package:pwa/services/pending_invoice_storage.dart';
 import 'package:pwa/services/stripe_checkout_service.dart';
@@ -81,6 +82,15 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
       if (createdInvoiceId == null || createdInvoiceId.toString().trim().isEmpty) {
         throw Exception('Invoice webhook succeeded, but no invoice id was returned.');
       }
+
+      // Payment succeeded AND invoice was created — now it's safe to empty the cart.
+      try {
+        await CartService.clearMyCart();
+      } catch (e) {
+        debugPrint('StripeCheckoutSuccessPage: failed to clear cart after paid invoice creation: $e');
+        // Non-fatal: invoice creation succeeded.
+      }
+
       await PendingInvoiceStorage.clear();
       _postedInvoice = true;
       _createdInvoiceId = createdInvoiceId.toString().trim();

@@ -263,11 +263,21 @@ class _InvoiceSuccessPageState extends State<InvoiceSuccessPage> {
       () => _mapValue(inv, 'total'),
     ]));
 
+    final paidAmount = _asDouble(_firstValue([
+      () => _safe(() => inv.amountPaid),
+      () => _mapValue(inv, 'amountPaid'),
+      () => _safe(() => inv.paidAmount),
+      () => _mapValue(inv, 'paidAmount'),
+    ]));
+
     final subtotal = subtotalRaw > 0
         ? subtotalRaw
         : (total > 0 && gst > 0)
             ? (total - gst)
             : total;
+
+    final inferredPaid = (total > 0) ? (total - amountDue) : 0.0;
+    final finalPaid = paidAmount > 0 ? paidAmount : (inferredPaid > 0 ? inferredPaid : 0.0);
 
     return _InvoiceViewModel(
       currency: currency,
@@ -277,6 +287,7 @@ class _InvoiceSuccessPageState extends State<InvoiceSuccessPage> {
       lineItems: lineItems,
       subtotal: subtotal,
       gst: gst,
+      paidAmount: finalPaid,
       amountDue: amountDue,
     );
   }
@@ -469,6 +480,25 @@ class _InvoiceSuccessPageState extends State<InvoiceSuccessPage> {
             children: [
               Expanded(
                 child: Text(
+                  'Paid Amount',
+                  style: Theme.of(context).textTheme.titleSmall?.semiBold,
+                ),
+              ),
+              Text(
+                '${vm.currency} ${_formatMoney(vm.paidAmount)}',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w900,
+                      color: cs.onSurface,
+                    ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+
+          Row(
+            children: [
+              Expanded(
+                child: Text(
                   'Amount Due',
                   style: Theme.of(context).textTheme.titleMedium?.semiBold,
                 ),
@@ -633,6 +663,7 @@ class _InvoiceViewModel {
   final List<_InvoiceLineItemView> lineItems;
   final double subtotal;
   final double gst;
+  final double paidAmount;
   final double amountDue;
 
   const _InvoiceViewModel({
@@ -643,6 +674,7 @@ class _InvoiceViewModel {
     required this.lineItems,
     required this.subtotal,
     required this.gst,
+    required this.paidAmount,
     required this.amountDue,
   });
 }

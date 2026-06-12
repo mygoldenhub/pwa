@@ -481,25 +481,10 @@ class _ProductsPageState extends State<ProductsPage> {
 
       if (!mounted) return;
       context.pop(); // close loading
-
-      try {
-        await CartService.clearMyCart();
-      } catch (e) {
-        debugPrint('Failed to clear cart before Stripe checkout: $e');
-        if (mounted) {
-          ScaffoldMessenger.of(context)
-            ..hideCurrentSnackBar()
-            ..showSnackBar(
-              SnackBar(
-                behavior: SnackBarBehavior.floating,
-                showCloseIcon: true,
-                margin: const EdgeInsets.all(AppSpacing.lg),
-                content: const Text('Payment started, but failed to clear your cart. You may see the items still in Cart until refresh.'),
-              ),
-            );
-        }
-      }
-
+      // IMPORTANT:
+      // Do NOT clear the cart here.
+      // The user has only *started* the payment flow; the invoice is not created
+      // yet and the payment might still fail/cancel.
       await _launchCheckoutUrl(checkoutUrl);
     } catch (e) {
       debugPrint('_startStripeCheckout failed: $e');
