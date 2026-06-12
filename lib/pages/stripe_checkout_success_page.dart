@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/nav.dart';
+import 'package:pwa/services/invoice_webhook_service.dart';
+import 'package:pwa/services/pending_invoice_storage.dart';
 import 'package:pwa/services/stripe_checkout_service.dart';
 import 'package:pwa/theme.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -21,6 +23,8 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
   Uri? _receiptUrl;
   Uri? _hostedInvoiceUrl;
   bool _openedOnce = false;
+  bool _postingInvoice = false;
+  bool _postedInvoice = false;
 
   @override
   void initState() {
@@ -47,12 +51,46 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
         _openedOnce = true;
         await launchUrl(best, mode: LaunchMode.externalApplication);
       }
+
+      // After payment completion, create the invoice via Make using the locally
+      // saved cart + invoice draft payload.
+      await _postPendingInvoiceIfNeeded();
     } catch (e) {
       debugPrint('StripeCheckoutSuccessPage load failed: $e');
       if (!mounted) return;
       setState(() => _error = e.toString());
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _postPendingInvoiceIfNeeded() async {
+    if (_postingInvoice || _postedInvoice) return;
+
+    final payload = await PendingInvoiceStorage.load();
+    if (payload == null) {
+      debugPrint('StripeCheckoutSuccessPage: no pending invoice payload found.');
+      return;
+    }
+
+    setState(() => _postingInvoice = true);
+    try {
+      final res = await InvoiceWebhookService.submitInvoicePayload(payload);
+      final createdInvoiceId = res.body;
+      if (createdInvoiceId == null || createdInvoiceId.toString().trim().isEmpty) {
+        throw Exception('Invoice webhook succeeded, but no invoice id was returned.');
+      }
+      await PendingInvoiceStorage.clear();
+      _postedInvoice = true;
+      if (!mounted) return;
+      context.go(AppRoutes.invoiceSuccess(createdInvoiceId.toString()));
+    } catch (e) {
+      debugPrint('StripeCheckoutSuccessPage: posting pending invoice failed: $e');
+      if (mounted) {
+        setState(() => _error = 'Failed to create invoice after payment: ${e.toString()}');
+      }
+    } finally {
+      if (mounted) setState(() => _postingInvoice = false);
     }
   }
 

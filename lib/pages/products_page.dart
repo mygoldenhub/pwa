@@ -11,6 +11,7 @@ import 'package:pwa/models/xero_product.dart';
 import 'package:pwa/nav.dart';
 import 'package:pwa/services/cart_service.dart';
 import 'package:pwa/services/invoice_webhook_service.dart';
+import 'package:pwa/services/pending_invoice_storage.dart';
 import 'package:pwa/services/stripe_checkout_service.dart';
 import 'package:pwa/services/xero_product_service.dart';
 import 'package:pwa/theme.dart';
@@ -404,6 +405,46 @@ class _ProductsPageState extends State<ProductsPage> {
 
   Future<void> _startStripeCheckout({required InvoiceDraft draft, required List<CartItem> cartItems}) async {
     final cs = Theme.of(context).colorScheme;
+
+    // Save cart + invoice draft locally so we can create the invoice after
+    // Stripe checkout completes (even after refresh/deep-link).
+    try {
+      final contactId = widget.appState.auth.currentUser?.xeroAccountId?.trim() ?? '';
+      final payload = <String, dynamic>{
+        'reference': draft.reference,
+        'currency_code': draft.currencyCode,
+        'currency_rate': draft.currencyRate,
+        'line_amount_type': InvoiceWebhookService.lineAmountTypeApi(draft.lineAmountType),
+        'date': InvoiceWebhookService.fmtDate(draft.date),
+        'due_date': InvoiceWebhookService.fmtDate(draft.dueDate),
+        'contactID': contactId,
+        'products': cartItems.map((c) {
+          final unitAmount = (c.unitPriceCents ?? 0) / 100.0;
+          return <String, dynamic>{
+            'item': c.productName,
+            'description': c.productName,
+            'quantity': c.quantity,
+            'unit amount': unitAmount,
+          };
+        }).toList(),
+      };
+      await PendingInvoiceStorage.save(payload);
+    } catch (e) {
+      debugPrint('Failed to save pending invoice payload: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              behavior: SnackBarBehavior.floating,
+              showCloseIcon: true,
+              margin: const EdgeInsets.all(AppSpacing.lg),
+              content: const Text('Could not save the cart for payment. Please try again.'),
+            ),
+          );
+      }
+      return;
+    }
 
     // Small blocking progress dialog.
     showDialog<void>(

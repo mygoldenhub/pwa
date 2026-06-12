@@ -46,12 +46,32 @@ Deno.serve(async (req) => {
     let hostedInvoiceUrl: string | null = null;
 
     if (paymentIntentId) {
+      // NOTE:
+      // - `charges` expansion isn’t always reliable across Stripe versions.
+      // - `latest_charge` is the most direct way to get the receipt_url.
       const pi = await stripe.paymentIntents.retrieve(paymentIntentId, {
-        expand: ["charges"],
+        // @ts-ignore
+        expand: ["latest_charge"],
       });
 
-      const charges = (pi.charges?.data ?? []).filter(Boolean);
-      if (charges.length > 0) {
+      // receipt_url comes from the Charge.
+      // - When expanded, latest_charge is a Charge object.
+      // - Otherwise it may be a string id.
+      // @ts-ignore
+      const latestCharge = (pi as any).latest_charge as any;
+      if (latestCharge) {
+        if (typeof latestCharge === "string") {
+          const ch = await stripe.charges.retrieve(latestCharge);
+          receiptUrl = (ch as any).receipt_url ?? null;
+        } else {
+          receiptUrl = latestCharge.receipt_url ?? null;
+        }
+      }
+
+      // Fallback: some accounts may still populate charges.data.
+      // @ts-ignore
+      const charges = ((pi as any).charges?.data ?? []).filter(Boolean);
+      if (!receiptUrl && charges.length > 0) {
         receiptUrl = charges[0].receipt_url ?? null;
       }
 
