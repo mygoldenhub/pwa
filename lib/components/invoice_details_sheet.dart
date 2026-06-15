@@ -2,8 +2,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/models/xero_invoice.dart';
+import 'package:pwa/services/stripe_checkout_service.dart';
 import 'package:pwa/services/xero_invoice_service.dart';
 import 'package:pwa/theme.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 /// A centered modal dialog that displays invoice details.
 ///
@@ -24,6 +26,8 @@ class _InvoiceDetailsDialogState extends State<InvoiceDetailsDialog> {
   bool _isLoading = true;
   Object? _error;
   XeroInvoice? _details;
+
+  bool _isStartingCheckout = false;
 
   @override
   void initState() {
@@ -95,11 +99,69 @@ class _InvoiceDetailsDialogState extends State<InvoiceDetailsDialog> {
 
   String _unitTimesQtyText({required double unitAmount, required double quantity}) => '${unitAmount.toStringAsFixed(2)} × ${_qtyText(quantity)}';
 
+  bool _isInvoiceUnpaid(XeroInvoice invoice) {
+    final s = (invoice.status ?? '').trim().toUpperCase();
+    if (s.isEmpty) return false;
+    return s != 'PAID';
+  }
+
+  Future<void> _startStripeCheckoutForInvoice(XeroInvoice invoice) async {
+    if (_isStartingCheckout) return;
+    setState(() => _isStartingCheckout = true);
+    final cs = Theme.of(context).colorScheme;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: cs.scrim.withValues(alpha: 0.52),
+      builder: (context) => const Dialog(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        child: Center(child: SizedBox(width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 2.6))),
+      ),
+    );
+
+    try {
+      final currency = (invoice.currencyCode ?? '').trim().isEmpty ? 'aud' : invoice.currencyCode!.trim();
+      final checkoutUrl = await StripeCheckoutService.createHostedCheckoutUrl(
+        currency: currency,
+        reference: (invoice.reference ?? invoice.invoiceNum ?? '').trim(),
+        invoiceId: invoice.invoiceId,
+        lineItems: StripeCheckoutService.buildLineItemsFromInvoice(invoice),
+        customerEmail: null,
+      );
+
+      if (!mounted) return;
+      context.pop(); // close loading
+
+      final ok = await launchUrl(checkoutUrl, mode: LaunchMode.externalApplication);
+      if (!ok) throw 'Could not open Stripe Checkout.';
+    } catch (e) {
+      debugPrint('InvoiceDetailsDialog: startStripeCheckout failed: $e');
+      if (mounted) {
+        context.pop(); // close loading
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              behavior: SnackBarBehavior.floating,
+              showCloseIcon: true,
+              margin: const EdgeInsets.all(AppSpacing.lg),
+              content: Text('Failed to start Stripe Checkout: ${e.toString()}'),
+            ),
+          );
+      }
+    } finally {
+      if (mounted) setState(() => _isStartingCheckout = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
     final invoice = _details ?? widget.invoice;
+    final isUnpaid = _isInvoiceUnpaid(invoice);
 
     final invoiceNum = (invoice.invoiceNum ?? '').trim();
     final title = invoiceNum.isNotEmpty ? invoiceNum : 'Invoice';
@@ -139,7 +201,28 @@ class _InvoiceDetailsDialogState extends State<InvoiceDetailsDialog> {
                     ),
                   ),
                   const SizedBox(width: AppSpacing.sm),
-                  widget.statusPill,
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      widget.statusPill,
+                      if (isUnpaid) ...[
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          height: 36,
+                          child: FilledButton.icon(
+                            onPressed: (_isLoading || _error != null || _isStartingCheckout) ? null : () => _startStripeCheckoutForInvoice(invoice),
+                            style: FilledButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.lg)),
+                            ),
+                            icon: Icon(Icons.credit_card, color: cs.onPrimary, size: 18),
+                            label: Text('Pay now', style: tt.labelLarge?.withColor(cs.onPrimary)),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                   const SizedBox(width: AppSpacing.xs),
                   IconButton(
                     onPressed: context.pop,

@@ -5,6 +5,7 @@ import 'package:pwa/components/app_header.dart';
 import 'package:pwa/components/new_invoice_sheet.dart';
 import 'package:pwa/models/xero_invoice.dart';
 import 'package:pwa/nav.dart';
+import 'package:pwa/services/stripe_checkout_service.dart';
 import 'package:pwa/services/xero_invoice_service.dart';
 import 'package:pwa/theme.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -34,6 +35,59 @@ class _InvoicePageState extends State<InvoicePage> {
   bool _isLoadingMore = false;
   bool _hasMore = true;
   Object? _loadError;
+
+  bool _isStartingCheckout = false;
+
+  Future<void> _startStripeCheckoutForInvoice(XeroInvoice invoice) async {
+    if (_isStartingCheckout) return;
+    setState(() => _isStartingCheckout = true);
+    final cs = Theme.of(context).colorScheme;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: cs.scrim.withValues(alpha: 0.52),
+      builder: (context) => const Dialog(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        child: Center(child: SizedBox(width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 2.6))),
+      ),
+    );
+
+    try {
+      final currency = (invoice.currencyCode ?? '').trim().isEmpty ? 'aud' : invoice.currencyCode!.trim();
+      final checkoutUrl = await StripeCheckoutService.createHostedCheckoutUrl(
+        currency: currency,
+        reference: (invoice.reference ?? invoice.invoiceNum ?? '').trim(),
+        invoiceId: invoice.invoiceId,
+        lineItems: StripeCheckoutService.buildLineItemsFromInvoice(invoice),
+        customerEmail: null,
+      );
+
+      if (!mounted) return;
+      context.pop();
+
+      final ok = await launchUrl(checkoutUrl, mode: LaunchMode.externalApplication);
+      if (!ok) throw 'Could not open Stripe Checkout.';
+    } catch (e) {
+      debugPrint('InvoicePage: startStripeCheckout failed: $e');
+      if (mounted) {
+        context.pop();
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              behavior: SnackBarBehavior.floating,
+              showCloseIcon: true,
+              margin: const EdgeInsets.all(AppSpacing.lg),
+              content: Text('Failed to start Stripe Checkout: ${e.toString()}'),
+            ),
+          );
+      }
+    } finally {
+      if (mounted) setState(() => _isStartingCheckout = false);
+    }
+  }
 
   void _sortInvoicesByUpdatedDateUtc() {
     DateTime key(XeroInvoice i) => i.updatedDateUtc ?? i.date ?? DateTime.fromMillisecondsSinceEpoch(0);
@@ -428,11 +482,19 @@ class _InvoicePageState extends State<InvoicePage> {
     return Column(
       children: [
         for (final inv in _invoices) ...[
-          InvoiceCard(
-            invoice: inv,
-            budgetText: _fmtTotalBudget(inv),
-            statusPill: _buildStatusPill(context, inv.status),
-            onTap: () => _openInvoiceDetails(inv),
+          Builder(
+            builder: (context) {
+              final s = (inv.status ?? '').trim().toUpperCase();
+              final showPayNow = s.isNotEmpty && s != 'PAID';
+              return InvoiceCard(
+                invoice: inv,
+                budgetText: _fmtTotalBudget(inv),
+                statusPill: _buildStatusPill(context, inv.status),
+                onTap: () => _openInvoiceDetails(inv),
+                showPayNow: showPayNow,
+                onPayNow: showPayNow ? () => _startStripeCheckoutForInvoice(inv) : null,
+              );
+            },
           ),
           const SizedBox(height: AppSpacing.md),
         ],
@@ -566,8 +628,18 @@ class InvoiceCard extends StatelessWidget {
   final String budgetText;
   final Widget statusPill;
   final VoidCallback? onTap;
+  final bool showPayNow;
+  final VoidCallback? onPayNow;
 
-  const InvoiceCard({super.key, required this.invoice, required this.budgetText, required this.statusPill, this.onTap});
+  const InvoiceCard({
+    super.key,
+    required this.invoice,
+    required this.budgetText,
+    required this.statusPill,
+    this.onTap,
+    this.showPayNow = false,
+    this.onPayNow,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -638,7 +710,21 @@ class InvoiceCard extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
                             Expanded(child: Text(updatedDateText, style: textTheme.labelSmall?.withColor(cs.onSurfaceVariant), softWrap: true)),
-                            if (onTap != null) ...[
+                            if (showPayNow) ...[
+                              const SizedBox(width: AppSpacing.sm),
+                              FilledButton.icon(
+                                onPressed: onPayNow,
+                                style: FilledButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                  minimumSize: const Size(0, 34),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                                  visualDensity: VisualDensity.compact,
+                                  splashFactory: NoSplash.splashFactory,
+                                ),
+                                icon: Icon(Icons.payment, size: 18, color: cs.onPrimary),
+                                label: Text('Pay now', style: textTheme.labelLarge?.semiBold.withColor(cs.onPrimary)),
+                              ),
+                            ] else if (onTap != null) ...[
                               const SizedBox(width: AppSpacing.sm),
                               Icon(Icons.chevron_right, color: cs.onSurfaceVariant),
                             ],
@@ -750,4 +836,3 @@ class InvoiceCardSkeleton extends StatelessWidget {
     );
   }
 }
-

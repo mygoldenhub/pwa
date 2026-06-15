@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:pwa/models/xero_invoice.dart';
 import 'package:pwa/supabase/supabase_config.dart';
 
 class StripeCheckoutService {
@@ -67,5 +68,56 @@ class StripeCheckoutService {
       debugPrint('StripeCheckoutService.getReceiptUrls failed: $e');
       rethrow;
     }
+  }
+
+  static double? _asDouble(dynamic v) {
+    if (v == null) return null;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString());
+  }
+
+  static String _lineItemTitle(Map<String, dynamic> li) {
+    final v = (li['description'] ??
+            li['Description'] ??
+            li['name'] ??
+            li['ItemCode'] ??
+            li['item_code'] ??
+            li['reference'])
+        ?.toString()
+        .trim();
+    return (v == null || v.isEmpty) ? 'Line item' : v;
+  }
+
+  /// Builds Stripe Checkout line items from a Xero invoice.
+  ///
+  /// Stripe quantities must be integers; fractional quantities are rounded.
+  /// If line items are missing or invalid, falls back to a single line item
+  /// based on invoice [amountDue] / [total].
+  static List<({String name, int unitAmountCents, int quantity})> buildLineItemsFromInvoice(XeroInvoice invoice) {
+    final currency = (invoice.currencyCode ?? '').trim();
+    final fallbackAmount = (invoice.amountDue ?? invoice.total ?? 0).toDouble();
+
+    final items = <({String name, int unitAmountCents, int quantity})>[];
+    for (final li in invoice.lineItems) {
+      final title = _lineItemTitle(li);
+      final qtyRaw = _asDouble(li['quantity'] ?? li['Quantity']);
+      final unitRaw = _asDouble(li['unit_amount'] ?? li['UnitAmount'] ?? li['unitAmount']);
+      final totalRaw = _asDouble(li['line_amount'] ?? li['LineAmount'] ?? li['lineAmount']);
+
+      final qty = (qtyRaw == null || qtyRaw <= 0) ? 1 : qtyRaw.round();
+      double unitAmount = (unitRaw ?? 0).toDouble();
+      if (unitAmount <= 0 && totalRaw != null && qty > 0) unitAmount = totalRaw / qty;
+
+      final cents = (unitAmount * 100).round();
+      if (cents <= 0) continue;
+      items.add((name: title, unitAmountCents: cents, quantity: qty));
+    }
+
+    if (items.isNotEmpty) return items;
+
+    final cents = (fallbackAmount * 100).round();
+    final invNum = (invoice.invoiceNum ?? '').trim();
+    final name = invNum.isEmpty ? 'Invoice ($currency)' : 'Invoice $invNum';
+    return [(name: name, unitAmountCents: cents <= 0 ? 1 : cents, quantity: 1)];
   }
 }
