@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/models/xero_invoice.dart';
+import 'package:pwa/services/invoice_webhook_service.dart';
+import 'package:pwa/services/pending_invoice_payment_storage.dart';
 import 'package:pwa/services/stripe_checkout_service.dart';
 import 'package:pwa/services/xero_invoice_service.dart';
 import 'package:pwa/theme.dart';
@@ -28,6 +30,54 @@ class _InvoiceDetailsDialogState extends State<InvoiceDetailsDialog> {
   XeroInvoice? _details;
 
   bool _isStartingCheckout = false;
+
+  Map<String, dynamic> _buildInvoicePaymentPayload(XeroInvoice invoice) {
+    final date = invoice.date ?? DateTime.now();
+    final dueDate = invoice.dueDate ?? date;
+    final contactId = (invoice.contactId ?? '').trim();
+
+    dynamic accountCodeOf(Map<String, dynamic> li) {
+      final raw = (li['account_code'] ?? li['AccountCode'] ?? li['accountCode'])?.toString().trim();
+      if (raw == null || raw.isEmpty) return null;
+      return int.tryParse(raw) ?? raw;
+    }
+
+    String lineItemTitle(Map<String, dynamic> li) {
+      final v = (li['description'] ?? li['Description'] ?? li['name'] ?? li['ItemCode'] ?? li['item_code'] ?? li['reference'])?.toString().trim();
+      return (v == null || v.isEmpty) ? 'Line item' : v;
+    }
+
+    final inv = invoice; // naming clarity
+    final products = inv.lineItems.map((li) {
+      final qty = _asDouble(li['quantity'] ?? li['Quantity']) ?? 1;
+      final unit = _asDouble(li['unit_amount'] ?? li['UnitAmount'] ?? li['unitAmount']);
+      final total = _asDouble(li['line_amount'] ?? li['LineAmount'] ?? li['lineAmount']);
+      final effectiveUnit = (unit != null && unit > 0)
+          ? unit
+          : (total != null && qty > 0)
+              ? total / qty
+              : 0.0;
+      return <String, dynamic>{
+        'description': li['description'] ?? li['Description'] ?? lineItemTitle(li),
+        'quantity': qty,
+        'unit amount': effectiveUnit,
+        'item': lineItemTitle(li),
+        'account code': accountCodeOf(li),
+      };
+    }).toList();
+
+    return <String, dynamic>{
+      'invoice_id': inv.invoiceId,
+      'reference': (inv.reference ?? inv.invoiceNum ?? '').toString(),
+      'currency_code': (inv.currencyCode ?? '').toString(),
+      'currency_rate': inv.currencyRate ?? 1.0,
+      'line_amount_type': (inv.lineAmountTypes ?? '').toString(),
+      'date': InvoiceWebhookService.fmtDate(date),
+      'due_date': InvoiceWebhookService.fmtDate(dueDate),
+      'contactID': contactId,
+      'products': products,
+    };
+  }
 
   @override
   void initState() {
@@ -122,6 +172,9 @@ class _InvoiceDetailsDialogState extends State<InvoiceDetailsDialog> {
     );
 
     try {
+      // Requirement: persist invoice details before leaving to Stripe Checkout.
+      await PendingInvoicePaymentStorage.save(_buildInvoicePaymentPayload(invoice));
+
       final currency = (invoice.currencyCode ?? '').trim().isEmpty ? 'aud' : invoice.currencyCode!.trim();
       final checkoutUrl = await StripeCheckoutService.createHostedCheckoutUrl(
         currency: currency,

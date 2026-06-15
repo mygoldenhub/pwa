@@ -5,6 +5,8 @@ import 'package:pwa/components/app_header.dart';
 import 'package:pwa/components/new_invoice_sheet.dart';
 import 'package:pwa/models/xero_invoice.dart';
 import 'package:pwa/nav.dart';
+import 'package:pwa/services/invoice_webhook_service.dart';
+import 'package:pwa/services/pending_invoice_payment_storage.dart';
 import 'package:pwa/services/stripe_checkout_service.dart';
 import 'package:pwa/services/xero_invoice_service.dart';
 import 'package:pwa/theme.dart';
@@ -38,6 +40,59 @@ class _InvoicePageState extends State<InvoicePage> {
 
   bool _isStartingCheckout = false;
 
+  Map<String, dynamic> _buildInvoicePaymentPayload(XeroInvoice invoice) {
+    final date = invoice.date ?? DateTime.now();
+    final dueDate = invoice.dueDate ?? date;
+    final contactId = (invoice.contactId ?? '').trim();
+
+    dynamic accountCodeOf(Map<String, dynamic> li) {
+      final raw = (li['account_code'] ?? li['AccountCode'] ?? li['accountCode'])?.toString().trim();
+      if (raw == null || raw.isEmpty) return null;
+      return int.tryParse(raw) ?? raw;
+    }
+
+    double? asDouble(dynamic v) {
+      if (v == null) return null;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString());
+    }
+
+    String lineItemTitle(Map<String, dynamic> li) {
+      final v = (li['description'] ?? li['Description'] ?? li['name'] ?? li['ItemCode'] ?? li['item_code'] ?? li['reference'])?.toString().trim();
+      return (v == null || v.isEmpty) ? 'Line item' : v;
+    }
+
+    final products = invoice.lineItems.map((li) {
+      final qty = asDouble(li['quantity'] ?? li['Quantity']) ?? 1;
+      final unit = asDouble(li['unit_amount'] ?? li['UnitAmount'] ?? li['unitAmount']);
+      final total = asDouble(li['line_amount'] ?? li['LineAmount'] ?? li['lineAmount']);
+      final effectiveUnit = (unit != null && unit > 0)
+          ? unit
+          : (total != null && qty > 0)
+              ? total / qty
+              : 0.0;
+      return <String, dynamic>{
+        'description': li['description'] ?? li['Description'] ?? lineItemTitle(li),
+        'quantity': qty,
+        'unit amount': effectiveUnit,
+        'item': lineItemTitle(li),
+        'account code': accountCodeOf(li),
+      };
+    }).toList();
+
+    return <String, dynamic>{
+      'invoice_id': invoice.invoiceId,
+      'reference': (invoice.reference ?? invoice.invoiceNum ?? '').toString(),
+      'currency_code': (invoice.currencyCode ?? '').toString(),
+      'currency_rate': invoice.currencyRate ?? 1.0,
+      'line_amount_type': (invoice.lineAmountTypes ?? '').toString(),
+      'date': InvoiceWebhookService.fmtDate(date),
+      'due_date': InvoiceWebhookService.fmtDate(dueDate),
+      'contactID': contactId,
+      'products': products,
+    };
+  }
+
   Future<void> _startStripeCheckoutForInvoice(XeroInvoice invoice) async {
     if (_isStartingCheckout) return;
     setState(() => _isStartingCheckout = true);
@@ -55,6 +110,10 @@ class _InvoicePageState extends State<InvoicePage> {
     );
 
     try {
+      // Requirement: when paying an existing invoice, save the invoice payload
+      // locally before leaving the app for Stripe Checkout.
+      await PendingInvoicePaymentStorage.save(_buildInvoicePaymentPayload(invoice));
+
       final currency = (invoice.currencyCode ?? '').trim().isEmpty ? 'aud' : invoice.currencyCode!.trim();
       final checkoutUrl = await StripeCheckoutService.createHostedCheckoutUrl(
         currency: currency,

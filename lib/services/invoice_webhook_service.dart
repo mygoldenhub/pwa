@@ -98,6 +98,7 @@ class InvoiceWebhookService {
     };
 
     try {
+      debugPrint("--------------------------------------------------");
       final res = await http
           .post(
             uri,
@@ -117,6 +118,7 @@ class InvoiceWebhookService {
         debugPrint('InvoiceWebhookService.createInvoice failed: status=${res.statusCode} body=${res.body}');
         throw 'Webhook failed (${res.statusCode}). ${res.body.isEmpty ? 'No response body.' : res.body}';
       }
+      debugPrint("--------------------------------------------------");
 
       dynamic decoded;
       try {

@@ -5,6 +5,7 @@ import 'package:pwa/nav.dart';
 import 'package:pwa/services/cart_service.dart';
 import 'package:pwa/services/invoice_webhook_service.dart';
 import 'package:pwa/services/pending_invoice_storage.dart';
+import 'package:pwa/services/pending_invoice_payment_storage.dart';
 import 'package:pwa/services/stripe_checkout_service.dart';
 import 'package:pwa/theme.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -27,6 +28,10 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
   bool _postingInvoice = false;
   bool _postedInvoice = false;
   String? _createdInvoiceId;
+
+  bool _postingPayment = false;
+  bool _postedPayment = false;
+  String? _paidInvoiceId;
 
   @override
   void initState() {
@@ -56,7 +61,12 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
 
       // After payment completion, create the invoice via Make using the locally
       // saved cart + invoice draft payload.
-      await _postPendingInvoiceIfNeeded();
+      // First, prefer the "pay existing invoice" flow. If present, we post it
+      // and then route back to the product page (per requirement).
+      final didPayExisting = await _postPendingInvoicePaymentIfNeeded();
+      if (!didPayExisting) {
+        await _postPendingInvoiceIfNeeded();
+      }
     } catch (e) {
       debugPrint('StripeCheckoutSuccessPage load failed: $e');
       if (!mounted) return;
@@ -103,6 +113,41 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
       }
     } finally {
       if (mounted) setState(() => _postingInvoice = false);
+    }
+  }
+
+  /// Posts a pending "invoice payment" payload (existing invoice) to Make.
+  ///
+  /// Returns true if a payment payload existed (posted successfully or failed).
+  Future<bool> _postPendingInvoicePaymentIfNeeded() async {
+    if (_postingPayment || _postedPayment) return false;
+
+    final payload = await PendingInvoicePaymentStorage.load();
+    if (payload == null) return false;
+
+    setState(() => _postingPayment = true);
+    try {
+      final res = await InvoiceWebhookService.submitInvoicePayload(payload, markPaid: true);
+      final invoiceId = (payload['invoice_id'] ?? payload['invoiceId'] ?? payload['invoiceID'])?.toString().trim();
+      _postedPayment = true;
+      _paidInvoiceId = (invoiceId == null || invoiceId.isEmpty) ? null : invoiceId;
+
+      await PendingInvoicePaymentStorage.clear();
+
+      if (!mounted) return true;
+
+      // Requirement: if response is success, go to product complete page.
+      // Interpreting this as returning to the Cart/Products page.
+      context.go(AppRoutes.cart);
+      return true;
+    } catch (e) {
+      debugPrint('StripeCheckoutSuccessPage: posting pending invoice payment failed: $e');
+      if (mounted) {
+        setState(() => _error = 'Failed to sync paid invoice after payment: ${e.toString()}');
+      }
+      return true;
+    } finally {
+      if (mounted) setState(() => _postingPayment = false);
     }
   }
 
