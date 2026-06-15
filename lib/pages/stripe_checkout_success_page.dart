@@ -120,14 +120,14 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
   ///
   /// Returns true if a payment payload existed (posted successfully or failed).
   Future<bool> _postPendingInvoicePaymentIfNeeded() async {
-    if (_postingPayment || _postedPayment) return false;
+    if (_postingPayment || _postedPayment) return true;
 
     final payload = await PendingInvoicePaymentStorage.load();
     if (payload == null) return false;
 
     setState(() => _postingPayment = true);
     try {
-      final res = await InvoiceWebhookService.submitInvoicePayload(payload, markPaid: true);
+      await InvoiceWebhookService.submitInvoicePayload(payload, markPaid: true);
       final invoiceId = (payload['invoice_id'] ?? payload['invoiceId'] ?? payload['invoiceID'])?.toString().trim();
       _postedPayment = true;
       _paidInvoiceId = (invoiceId == null || invoiceId.isEmpty) ? null : invoiceId;
@@ -135,10 +135,10 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
       await PendingInvoicePaymentStorage.clear();
 
       if (!mounted) return true;
-
-      // Requirement: if response is success, go to product complete page.
-      // Interpreting this as returning to the Cart/Products page.
-      context.go(AppRoutes.cart);
+      setState(() {});
+      // Requirement: after Stripe checkout is completed, call Make.com with the
+      // saved payload. If the response is success, user should remain on this
+      // success page (/app/stripe/success?session_id=...).
       return true;
     } catch (e) {
       debugPrint('StripeCheckoutSuccessPage: posting pending invoice payment failed: $e');
@@ -153,10 +153,16 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
 
   Future<void> _openCreatedInvoice() async {
     // Ensure we have an invoice id (try to post if it hasn't happened yet).
-    if (_createdInvoiceId == null) {
+    // Priority:
+    // 1) Existing-invoice payment flow (invoice_id stored before Stripe)
+    // 2) Cart -> create invoice flow (invoice id returned from webhook)
+    if (_paidInvoiceId == null) {
+      await _postPendingInvoicePaymentIfNeeded();
+    }
+    if (_createdInvoiceId == null && _paidInvoiceId == null) {
       await _postPendingInvoiceIfNeeded();
     }
-    final id = _createdInvoiceId?.trim() ?? '';
+    final id = (_paidInvoiceId ?? _createdInvoiceId)?.trim() ?? '';
     if (!mounted) return;
     if (id.isEmpty) {
       setState(() => _error = _error ?? 'Invoice is not ready yet. Please wait a moment and try again.');

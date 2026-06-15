@@ -341,7 +341,7 @@ class _InvoiceDetailsDialogState extends State<InvoiceDetailsDialog> {
                           _SheetCard(
                             padding: AppSpacing.paddingMd,
                             child: _PaymentRow(
-                              dateText: _fmtDateTimeLocal(_parsePaymentDate(p['date'] ?? p['data'] ?? p['Date'])),
+                              dateText: _fmtDateTimeLocal(_parsePaymentDate(p['date'] ?? p['data'] ?? p['Date'])).split(' ').first,
                               reference: (p['reference'] ?? p['Reference'])?.toString().trim(),
                               amountText: _money(_asDouble(p['amount'] ?? p['Amount']), currencyCode: invoice.currencyCode),
                             ),
