@@ -38,14 +38,17 @@ class AppRouter {
       initialLocation: AppRoutes.loading,
       refreshListenable: appState,
       redirect: (context, state) {
-        final loc = state.uri.toString();
+        // Use path for comparisons so query params (e.g. ?flow=recovery) don't break guards.
+        final path = state.uri.path;
         final ready = appState.isReady;
         final signedIn = appState.auth.isSignedIn;
 
-        final isLoading = loc == AppRoutes.loading;
-        final isAuth = loc == AppRoutes.welcome || loc == AppRoutes.login || loc == AppRoutes.register || loc == AppRoutes.verifyEmail || loc == AppRoutes.resetPassword;
-        final isNewPassword = loc == AppRoutes.newPassword;
-        final isApp = loc.startsWith('/app');
+        final isLoading = path == AppRoutes.loading;
+        final isAuth = path == AppRoutes.welcome || path == AppRoutes.login || path == AppRoutes.register || path == AppRoutes.verifyEmail || path == AppRoutes.resetPassword;
+        final isNewPassword = path == AppRoutes.newPassword;
+        final isApp = path.startsWith('/app');
+
+        final isRecoveryFlow = state.uri.queryParameters['flow'] == 'recovery';
 
         if (!ready && !isLoading) return AppRoutes.loading;
         if (ready && isLoading) return signedIn ? AppRoutes.cart : AppRoutes.welcome;
@@ -53,7 +56,7 @@ class AppRouter {
         // Allow navigating to the New Password page during the recovery flow.
         // Supabase may not reflect a signed-in session immediately in appState, but the UI
         // should still be able to reach this route after OTP verification.
-        if (signedIn && isAuth) return AppRoutes.cart;
+        if (signedIn && isAuth && !isRecoveryFlow) return AppRoutes.cart;
         return null;
       },
       routes: [
@@ -71,7 +74,10 @@ class AppRouter {
         ),
         GoRoute(
           path: AppRoutes.resetPassword,
-          pageBuilder: (context, state) => NoTransitionPage(child: ResetPasswordPage(appState: appState)),
+          pageBuilder: (context, state) {
+            final email = state.uri.queryParameters['email'];
+            return NoTransitionPage(child: ResetPasswordPage(appState: appState, initialEmail: email));
+          },
         ),
         GoRoute(
           path: AppRoutes.newPassword,

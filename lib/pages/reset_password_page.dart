@@ -7,7 +7,8 @@ import 'package:pwa/theme.dart';
 
 class ResetPasswordPage extends StatefulWidget {
   final AppState appState;
-  const ResetPasswordPage({super.key, required this.appState});
+  final String? initialEmail;
+  const ResetPasswordPage({super.key, required this.appState, this.initialEmail});
 
   @override
   State<ResetPasswordPage> createState() => _ResetPasswordPageState();
@@ -16,6 +17,13 @@ class ResetPasswordPage extends StatefulWidget {
 class _ResetPasswordPageState extends State<ResetPasswordPage> {
   final _emailController = TextEditingController();
   final _codeController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    final initial = (widget.initialEmail ?? '').trim();
+    if (initial.isNotEmpty) _emailController.text = initial;
+  }
 
   @override
   void dispose() {
@@ -72,7 +80,10 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
       showLogo: false,
       showHeader: true,
       showBack: true,
-      onBack: () => context.go(AppRoutes.login),
+      // During recovery, Supabase may temporarily create a signed-in session after OTP verification.
+      // Our router guard redirects signed-in users away from /login unless flow=recovery is present.
+      // So we include it here to ensure back always lands on Login (not Cart).
+      onBack: () => context.go('${AppRoutes.login}?flow=recovery'),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

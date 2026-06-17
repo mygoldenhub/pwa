@@ -70,7 +70,12 @@ class _NewPasswordPageState extends State<NewPasswordPage> {
       showLogo: false,
       showHeader: true,
       showBack: true,
-      onBack: () => context.go(AppRoutes.login),
+      onBack: () {
+        final email = widget.email.trim().toLowerCase();
+        final q = <String, String>{'flow': 'recovery'};
+        if (email.isNotEmpty) q['email'] = email;
+        context.go(Uri(path: AppRoutes.resetPassword, queryParameters: q).toString());
+      },
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
