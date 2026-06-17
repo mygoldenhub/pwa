@@ -220,7 +220,7 @@ class _InvoiceDetailsDialogState extends State<InvoiceDetailsDialog> {
     final title = invoiceNum.isNotEmpty ? invoiceNum : 'Invoice';
     final reference = (invoice.reference ?? '').trim();
     final updated = _fmtDateTimeLocal(invoice.updatedDateUtc ?? invoice.date);
-    final due = _fmtDateTimeLocal(invoice.dueDate);
+    final due = _fmtDateTimeLocal(invoice.dueDate).split(' ').first;
 
     final lineItems = invoice.lineItems;
     final payments = invoice.payments;

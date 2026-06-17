@@ -70,7 +70,7 @@ class _NewPasswordPageState extends State<NewPasswordPage> {
       showLogo: false,
       showHeader: true,
       showBack: true,
-      onBack: () => context.go(AppRoutes.resetPassword),
+      onBack: () => context.go(AppRoutes.login),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
