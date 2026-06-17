@@ -11,6 +11,8 @@ import 'package:pwa/pages/loading_page.dart';
 import 'package:pwa/pages/login_page.dart';
 import 'package:pwa/pages/products_page.dart';
 import 'package:pwa/pages/register_page.dart';
+import 'package:pwa/pages/reset_password_page.dart';
+import 'package:pwa/pages/new_password_page.dart';
 import 'package:pwa/pages/verify_email_code_page.dart';
 import 'package:pwa/pages/welcome_page.dart';
 import 'package:pwa/pages/xero_product_detail_page.dart';
@@ -41,12 +43,16 @@ class AppRouter {
         final signedIn = appState.auth.isSignedIn;
 
         final isLoading = loc == AppRoutes.loading;
-        final isAuth = loc == AppRoutes.welcome || loc == AppRoutes.login || loc == AppRoutes.register || loc == AppRoutes.verifyEmail;
+        final isAuth = loc == AppRoutes.welcome || loc == AppRoutes.login || loc == AppRoutes.register || loc == AppRoutes.verifyEmail || loc == AppRoutes.resetPassword;
+        final isNewPassword = loc == AppRoutes.newPassword;
         final isApp = loc.startsWith('/app');
 
         if (!ready && !isLoading) return AppRoutes.loading;
         if (ready && isLoading) return signedIn ? AppRoutes.cart : AppRoutes.welcome;
         if (!signedIn && isApp) return AppRoutes.welcome;
+        // Allow navigating to the New Password page during the recovery flow.
+        // Supabase may not reflect a signed-in session immediately in appState, but the UI
+        // should still be able to reach this route after OTP verification.
         if (signedIn && isAuth) return AppRoutes.cart;
         return null;
       },
@@ -62,6 +68,22 @@ class AppRouter {
         GoRoute(
           path: AppRoutes.login,
           pageBuilder: (context, state) => NoTransitionPage(child: LoginPage(appState: appState)),
+        ),
+        GoRoute(
+          path: AppRoutes.resetPassword,
+          pageBuilder: (context, state) => NoTransitionPage(child: ResetPasswordPage(appState: appState)),
+        ),
+        GoRoute(
+          path: AppRoutes.newPassword,
+          pageBuilder: (context, state) {
+            final extra = (state.extra is Map) ? (state.extra as Map) : const <String, dynamic>{};
+            return NoTransitionPage(
+              child: NewPasswordPage(
+                appState: appState,
+                email: (extra['email'] ?? '').toString(),
+              ),
+            );
+          },
         ),
         GoRoute(
           path: AppRoutes.welcome,
@@ -186,6 +208,8 @@ class AppRoutes {
   static const String authCallback = '/auth/callback';
   static const String welcome = '/welcome';
   static const String login = '/login';
+  static const String resetPassword = '/reset-password';
+  static const String newPassword = '/new-password';
   static const String register = '/register';
   static const String verifyEmail = '/verify-email';
 

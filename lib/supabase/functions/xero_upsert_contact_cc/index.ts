@@ -95,7 +95,20 @@ function safeParseJson(text: string): unknown {
   }
 }
 
-async function callMakeHook(params: { name: string; email: string; company: string; phone: string }): Promise<string> {
+type MakeHookResult = { status?: unknown; xero_account_id?: unknown };
+
+function _asBoolLike(v: unknown): boolean | null {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    if (s === "true" || s === "1" || s === "ok" || s === "success") return true;
+    if (s === "false" || s === "0" || s === "fail" || s === "failed" || s === "error") return false;
+  }
+  return null;
+}
+
+async function callMakeHook(params: { name: string; email: string; company: string; phone: string }): Promise<{ status: boolean | null; xeroAccountId: string }> {
   // Default to the user-provided Make.com hook base URL (without query params).
   const base =
     Deno.env.get("MAKE_HOOK_BASE_URL") ??
@@ -116,18 +129,30 @@ async function callMakeHook(params: { name: string; email: string; company: stri
     throw new Error(`make_hook_failed status=${res.status} body=${snippet}`);
   }
 
-  // Hook may return JSON: { xero_account_id: "..." } or { xeroAccountId: "..." }
-  // or plain text containing the ID.
+  // Expected JSON: { status: "true"|"false", xero_account_id: "..." }
+  // Legacy JSON variants: { xero_account_id: "..." }
+  // Or plain text containing the ID.
   const parsed = safeParseJson(text);
   if (parsed && typeof parsed === "object") {
     const m = parsed as Record<string, unknown>;
-    const candidates = [m["xero_account_id"], m["xeroAccountId"], m["contact_id"], m["ContactID"], m["id"]];
-    for (const c of candidates) {
-      if (typeof c === "string" && c.trim()) return c.trim();
+
+    const rawStatus = (m as MakeHookResult)["status"];
+    const status = _asBoolLike(rawStatus);
+
+    const idCandidates = [
+      (m as MakeHookResult)["xero_account_id"],
+      m["xeroAccountId"],
+      m["contact_id"],
+      m["ContactID"],
+      m["id"],
+    ];
+    for (const c of idCandidates) {
+      const s = typeof c === "string" ? c.trim() : "";
+      if (s) return { status, xeroAccountId: s };
     }
   }
 
-  if (text && text.length < 200) return text;
+  if (text && text.length < 200) return { status: true, xeroAccountId: text };
   throw new Error("make_hook_missing_xero_account_id");
 }
 
@@ -172,7 +197,22 @@ serve(async (req) => {
     const serviceRole = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
 
     // A) Call Make webhook first, so we don't create a Supabase user if Xero fails.
-    const xeroAccountId = await callMakeHook({ name, email, company, phone });
+    const hook = await callMakeHook({ name, email, company, phone });
+    const xeroAccountId = hook.xeroAccountId;
+
+    // If Make.com indicates a failure and specifically that the contact already exists,
+    // return a deterministic error that Flutter can show to the user.
+    const isHookSuccess = hook.status !== false;
+    const normalizedId = (xeroAccountId ?? "").trim().toLowerCase();
+    if (!isHookSuccess && (normalizedId === "contact_already_exist" || normalizedId === "contact_already_exists")) {
+      return jsonResponse(409, {
+        ok: false,
+        error: "contact_already_exist",
+        message: "Contact already exist",
+        xero_account_id: xeroAccountId,
+        status: hook.status,
+      });
+    }
 
     // B) Create auth user via service role (admin).
     const admin = createClient(supabaseUrl, serviceRole, {

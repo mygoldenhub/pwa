@@ -134,7 +134,7 @@ class _RegisterPageState extends State<RegisterPage> {
       if (code.trim().length != 6 || code.trim().contains(RegExp(r'\D'))) throw Exception('Please enter the 6-digit code.');
       if (pin.trim().length != 4 || pin.trim().contains(RegExp(r'\D'))) throw Exception('PIN must be exactly 4 digits.');
 
-      await widget.appState.auth.verifySignupEmailCode(
+      final result = await widget.appState.auth.verifySignupEmailCode(
         email: normalizedEmail,
         displayName: displayName,
         companyName: companyName,
@@ -150,7 +150,19 @@ class _RegisterPageState extends State<RegisterPage> {
       debugPrint('Register failed: $e');
       if (!mounted) return;
 
-      final msg = e.toString().replaceFirst('Exception: ', '');
+      String msg = e.toString().replaceFirst('Exception: ', '');
+      final lc = msg.toLowerCase();
+      if (lc.contains('contact_already_exist') || lc.contains('contact_already_exists')) {
+        await showDialog<void>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Contact already exist'),
+            content: const Text('This email is already registered in Xero.'),
+            actions: [TextButton(onPressed: () => context.pop(), child: const Text('OK'))],
+          ),
+        );
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(msg)),
       );

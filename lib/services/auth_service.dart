@@ -253,6 +253,17 @@ class AuthService extends ChangeNotifier {
     }
   }
 
+  Future<void> _clearSavedPasswordForEmail(String email) async {
+    final normalized = email.trim().toLowerCase();
+    if (normalized.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_passwordKeyForEmail(normalized));
+    } catch (e) {
+      debugPrint('AuthService: failed to clear saved password for email: $e');
+    }
+  }
+
   Future<String?> _getSavedPasswordForEmail(String email) async {
     final normalized = email.trim().toLowerCase();
     if (normalized.isEmpty) return null;
@@ -370,6 +381,7 @@ class AuthService extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
     try {
+      debugPrint("------RegisterTradeAccount------");
       final normalizedEmail = email.trim().toLowerCase();
       if (displayName.trim().isEmpty) throw Exception('Please enter your full name.');
       if (companyName.trim().isEmpty) throw Exception('Please enter your company name.');
@@ -404,6 +416,9 @@ class AuthService extends ChangeNotifier {
         final data = res.data;
         final maybe = (data is Map) ? data['contactId'] : null;
         xeroContactId = (maybe is String) ? maybe.trim() : '';
+        debugPrint("------serivce-----");
+        debugPrint('$xeroContactId');
+        debugPrint("------serivce-----");
         if (xeroContactId.isEmpty) {
           debugPrint('AuthService.registerTradeAccount: $fnName unexpected response: ${res.data}');
           throw Exception('Failed to create your Xero account. Please try again.');
@@ -420,6 +435,7 @@ class AuthService extends ChangeNotifier {
       }
 
       // 2) Create Supabase Auth user.
+      debugPrint("// 2) Create Supabase Auth user.");
       final res = await SupabaseConfig.auth
           .signUp(
         email: normalizedEmail,
@@ -687,15 +703,27 @@ class AuthService extends ChangeNotifier {
             .timeout(const Duration(seconds: 25));
 
         final data = res.data;
+        debugPrint("------------------------");
+        debugPrint('$data');
+        debugPrint("------------------------");
         if (data is Map) {
           final ok = data['ok'];
           if (ok is bool && !ok) {
             final msg = (data['message'] ?? data['error'] ?? 'Signup failed').toString();
             throw Exception(msg);
           }
+
+          final err = (data['error'] ?? '').toString().trim().toLowerCase();
+          if (err == 'contact_already_exist' || err == 'contact_already_exists') {
+            throw Exception('contact_already_exist');
+          }
         }
       } catch (e) {
         debugPrint('AuthService.verifySignupEmailCode edge function failed: $e');
+        final msg = e.toString().toLowerCase();
+        if (msg.contains('contact_already_exist') || msg.contains('contact_already_exists')) {
+          throw Exception('contact_already_exist');
+        }
         rethrow;
       }
 
@@ -905,6 +933,112 @@ class AuthService extends ChangeNotifier {
     // Keep the original message as a fallback, but remove noisy prefixes.
     if (msg.isEmpty) return 'Authentication failed. Please try again.';
     return msg;
+  }
+
+  Future<void> requestPasswordResetCode({required String email}) async {
+    _isLoading = true;
+    notifyListeners();
+    try {
+      final normalized = email.trim().toLowerCase();
+      if (normalized.isEmpty || !normalized.contains('@')) throw Exception('Please enter a valid email.');
+
+      // Use Supabase's password-recovery flow.
+      // This sends a recovery OTP / link using your Supabase SMTP settings.
+      await SupabaseConfig.auth.resetPasswordForEmail(normalized).timeout(_authTimeout);
+    } on AuthException catch (e) {
+      debugPrint('AuthService.requestPasswordResetCode auth error: ${e.message}');
+      throw Exception(_friendlyAuthMessage(e));
+    } catch (e) {
+      debugPrint('AuthService.requestPasswordResetCode failed: $e');
+      rethrow;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// Verifies the recovery OTP sent by Supabase (SMTP) and establishes a session.
+  ///
+  /// After this succeeds, the app should prompt the user to set a new password
+  /// via [updateRecoveredPassword].
+  Future<void> verifyPasswordResetCode({required String email, required String code}) async {
+    _isLoading = true;
+    notifyListeners();
+    try {
+      final normalized = email.trim().toLowerCase();
+      if (normalized.isEmpty || !normalized.contains('@')) throw Exception('Please enter a valid email.');
+      final token = code.trim();
+      if (token.length != 6 || token.contains(RegExp(r'\D'))) throw Exception('Please enter the 6-digit code.');
+
+      // 1) Verify the recovery OTP with Supabase Auth (SMTP-delivered).
+      final verifyRes = await SupabaseConfig.auth
+          .verifyOTP(type: OtpType.recovery, email: normalized, token: token)
+          .timeout(_authTimeout);
+      if (verifyRes.user == null && SupabaseConfig.auth.currentUser == null) {
+        throw Exception('Verification succeeded, but no user session was created. Please try again.');
+      }
+    } on AuthException catch (e) {
+      debugPrint('AuthService.verifyPasswordResetCode auth error: ${e.message}');
+      throw Exception(_friendlyAuthMessage(e));
+    } catch (e) {
+      debugPrint('AuthService.verifyPasswordResetCode failed: $e');
+      rethrow;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// Sets a new password after the recovery OTP has been verified.
+  ///
+  /// This updates:
+  /// - Supabase Auth password (so login works)
+  /// - `public.users.password` (per your current backend design)
+  Future<void> updateRecoveredPassword({required String newPassword, String? emailHint}) async {
+    _isLoading = true;
+    notifyListeners();
+    try {
+      final p = newPassword.trim();
+      if (p.length < 6) throw Exception('Password must be at least 6 characters.');
+
+      // Must have a session from verifyOTP(recovery).
+      final currentUser = SupabaseConfig.auth.currentUser;
+      final email = (currentUser?.email ?? emailHint ?? '').trim().toLowerCase();
+      if (email.isEmpty) throw Exception('No verified session found. Please verify the code again.');
+
+      await SupabaseConfig.auth.updateUser(UserAttributes(password: p)).timeout(_authTimeout);
+
+      // Keep public.users in sync (your app uses this table as the primary profile store).
+      try {
+        await SupabaseService.update(
+          'users',
+          {
+            'password': p,
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          },
+          filters: {'email': email},
+        );
+      } catch (e) {
+        // If RLS blocks this update, Auth password is still updated.
+        debugPrint('AuthService.updateRecoveredPassword: failed to update public.users.password (possible RLS): $e');
+      }
+
+      await _clearSavedPasswordForEmail(email);
+
+      // For safety: recovery flow leaves a session active; force user to log in.
+      await SupabaseConfig.auth.signOut().timeout(_authTimeout);
+      _currentUser = null;
+      notifyListeners();
+    } on AuthException catch (e) {
+      debugPrint('AuthService.updateRecoveredPassword auth error: ${e.message}');
+      throw Exception(_friendlyAuthMessage(e));
+    } catch (e) {
+      debugPrint('AuthService.updateRecoveredPassword failed: $e');
+      rethrow;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
   }
 
   Future<void> signOut() async {

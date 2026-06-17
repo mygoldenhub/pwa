@@ -21,16 +21,24 @@ entrypoint = "./functions/xero_upsert_contact_cc/index.ts"
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/xero_upsert_contact_cc/*.html" ]
 
-[functions.sync_xero_invoices]
+
+[functions.get-all-xero-items]
 enabled = true
 verify_jwt = false
-import_map = "./functions/sync_xero_invoices/deno.json"
-# Uncomment to specify a custom file path to the entrypoint.
-# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
-entrypoint = "./functions/sync_xero_invoices/index.ts"
-# Specifies static files to be bundled with the function. Supports glob patterns.
-# For example, if you want to serve static HTML pages in your function:
-# static_files = [ "./functions/sync_xero_invoices/*.html" ]
+import_map = "./functions/get-all-xero-items/deno.json"
+entrypoint = "./functions/get-all-xero-items/index.ts"
+
+[functions.save-all-invoice]
+enabled = true
+verify_jwt = false
+import_map = "./functions/save-all-invoice/deno.json"
+entrypoint = "./functions/save-all-invoice/index.ts"
+
+[functions.xero-products-exception-data]
+enabled = true
+verify_jwt = false
+import_map = "./functions/xero-products-exception-data/deno.json"
+entrypoint = "./functions/xero-products-exception-data/index.ts"
 
 [functions.create_stripe_checkout_session]
 enabled = true
@@ -53,3 +61,9 @@ entrypoint = "./functions/get_stripe_checkout_receipt/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/get_stripe_checkout_receipt/*.html" ]
+
+[functions.reset_password_code]
+enabled = true
+verify_jwt = false
+import_map = "./functions/reset_password_code/deno.json"
+entrypoint = "./functions/reset_password_code/index.ts"

@@ -138,7 +138,17 @@ class _LoginPageState extends State<LoginPage> {
           const SizedBox(height: AppSpacing.lg),
 
           _OrDivider(),
-          const SizedBox(height: AppSpacing.md),
+          const SizedBox(height: AppSpacing.xs),
+          Row(
+            children: [
+              const Spacer(),
+              TextButton(
+                onPressed: isBusy ? null : () => context.go(AppRoutes.resetPassword),
+                child: const Text('Forgot Password'),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.sm),
           _LoginMethodIconPicker(
             method: _method,
             onChanged: isBusy
