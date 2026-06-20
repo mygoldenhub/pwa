@@ -362,7 +362,7 @@ class _ProductsPageState extends State<ProductsPage> {
               ),
               const SizedBox(height: AppSpacing.sm),
               Text(
-                'Choose Now to pay instantly, or Later to pay at your convenience.',
+                'Pay now or charge account please.',
                 style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
               ),
               const SizedBox(height: AppSpacing.lg),
@@ -604,7 +604,7 @@ class _ProductsPageState extends State<ProductsPage> {
         title: 'Cart',
         actions: [
           _HeaderActionButton(
-            label: 'Scan',
+            label: 'Add product',
             icon: Icons.add,
             onTap: _openScanChooser,
           ),
@@ -1097,7 +1097,7 @@ class _EmptyState extends StatelessWidget {
               FilledButton.icon(
                 onPressed: onPrimaryAction,
                 icon: Icon(Icons.add, color: cs.onPrimary),
-                label: Text('Scan', style: TextStyle(color: cs.onPrimary)),
+                label: Text('Add product', style: TextStyle(color: cs.onPrimary)),
               ),
             ],
           ),
