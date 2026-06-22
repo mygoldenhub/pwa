@@ -471,11 +471,20 @@ class _ProductsPageState extends State<ProductsPage> {
           .map((c) => (name: c.productName.trim(), unitAmountCents: c.unitPriceCents ?? 0, quantity: c.quantity))
           .toList();
 
+      // IMPORTANT: Stripe amount must include tax.
+      // This cart flow uses `LineAmountType.exclusive`, so we add GST as a separate line item.
+      final subtotalCents = cartItems.fold<int>(0, (sum, c) => sum + (c.unitPriceCents ?? 0) * c.quantity);
+      final gstCents = (subtotalCents * 0.10).round();
+      final lineItemsWithTax = <({String name, int unitAmountCents, int quantity})>[...lineItems];
+      if (gstCents > 0) {
+        lineItemsWithTax.add((name: 'GST (10%)', unitAmountCents: gstCents, quantity: 1));
+      }
+
       final checkoutUrl = await StripeCheckoutService.createHostedCheckoutUrl(
         currency: currency,
         reference: draft.reference,
         invoiceId: null,
-        lineItems: lineItems,
+        lineItems: lineItemsWithTax,
         customerEmail: widget.appState.auth.currentUser?.email,
       );
 

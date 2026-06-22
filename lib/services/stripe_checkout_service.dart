@@ -113,7 +113,16 @@ class StripeCheckoutService {
       items.add((name: title, unitAmountCents: cents, quantity: qty));
     }
 
-    if (items.isNotEmpty) return items;
+    if (items.isNotEmpty) {
+      // Xero line items often store tax separately (`TaxAmount`).
+      // To ensure Stripe collects the full amount due, add a dedicated tax line.
+      final tax = (invoice.totalTax ?? 0).toDouble();
+      final taxCents = (tax * 100).round();
+      if (taxCents > 0) {
+        return [...items, (name: 'Tax', unitAmountCents: taxCents, quantity: 1)];
+      }
+      return items;
+    }
 
     final cents = (fallbackAmount * 100).round();
     final invNum = (invoice.invoiceNum ?? '').trim();
