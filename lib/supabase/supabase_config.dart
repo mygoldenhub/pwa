@@ -6,8 +6,8 @@ import 'package:flutter/foundation.dart';
 /// Generic Supabase configuration template
 /// Replace YOUR_ and YOUR_ with your actual values
 class SupabaseConfig {
-  static const String supabaseUrl = 'https://xegupowytmmqlrdtille.supabase.co';
-  static const String anonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhlZ3Vwb3d5dG1tcWxyZHRpbGxlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzMTU2NzcsImV4cCI6MjA5NDg5MTY3N30.7WZQ0aXvGBj9u65eO0-_GPePkqqvEhH27B3n4-GvIG0';
+  static const String supabaseUrl = 'https://psvlvrdgwtnpwwhkbqfl.supabase.co';
+  static const String anonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBzdmx2cmRnd3RucHd3aGticWZsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MjI0MTU0MiwiZXhwIjoyMDk3ODE3NTQyfQ.SeGhetc5WuOYi-SCSbWc4V_gtqMy0hDFXojNsr1LTRo';
 
   /// Returns the absolute HTTPS URL for an Edge Function.
   /// Example: https://<project>.supabase.co/functions/v1/check_email_exists

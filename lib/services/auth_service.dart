@@ -682,6 +682,7 @@ class AuthService extends ChangeNotifier {
       // or upsert the profile directly. We delegate ALL account finalization to
       // the Edge Function (Xero + password + profile + PIN).
       try {
+
         const fnName = 'xero_upsert_contact_cc';
         final debugUrl = SupabaseConfig.edgeFunctionUrl(fnName);
         debugPrint('AuthService.verifySignupEmailCode: invoking $fnName at $debugUrl');
@@ -845,6 +846,9 @@ class AuthService extends ChangeNotifier {
       final res = await SupabaseConfig.auth
           .signInWithPassword(email: normalized, password: savedPassword)
           .timeout(_authTimeout);
+      debugPrint('----------------------');
+      debugPrint('$res');
+      debugPrint('----------------------');
       final supaUser = res.user;
       if (supaUser == null) throw Exception('Sign in failed. Please try again.');
 

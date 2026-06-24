@@ -12,11 +12,11 @@ select cron.schedule(
   $$
   select
     net.http_post(
-      url := 'https://xegupowytmmqlrdtille.supabase.co/functions/v1/sync_xero_items',
+      url := 'https://psvlvrdgwtnpwwhkbqfl.supabase.co/functions/v1/sync_xero_items',
       headers := jsonb_build_object(
         'content-type', 'application/json',
         -- Use Authorization Bearer header so the Edge Function accepts the incoming trigger
-        'Authorization', 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhlZ3Vwb3d5dG1tcWxyZHRpbGxlIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTMxNTY3NywiZXhwIjoyMDk0ODkxNjc3fQ.hM-0w_1cvy2kKpa6rbAkVL6kWAOLZfK4fArqH8P3bz8'
+        'Authorization', 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBzdmx2cmRnd3RucHd3aGticWZsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MjI0MTU0MiwiZXhwIjoyMDk3ODE3NTQyfQ.SeGhetc5WuOYi-SCSbWc4V_gtqMy0hDFXojNsr1LTRo'
       ),
       body := '{}'::jsonb
     );

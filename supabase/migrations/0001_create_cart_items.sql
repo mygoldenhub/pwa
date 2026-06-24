@@ -7,7 +7,7 @@ create table if not exists public.cart_items (
   xero_item_id text not null,
   product_name text not null,
   product_code text null,
-  unit_price_cents integer null,
+  unit_price_cents float4 null,
   quantity integer not null default 1 check (quantity > 0),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
