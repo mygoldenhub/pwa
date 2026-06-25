@@ -781,14 +781,37 @@ class AuthService extends ChangeNotifier {
     }
   }
 
+  Future<void> _ensureEmailExistsInUsersTableOrThrow({required String email}) async {
+    final normalized = email.trim().toLowerCase();
+    if (normalized.isEmpty || !normalized.contains('@')) throw Exception('Please enter a valid email.');
+    try {
+      final row = await SupabaseService.selectSingle(
+        'users',
+        select: 'id',
+        filters: {'email': normalized},
+        timeout: _authTimeout,
+      );
+      if (row == null) throw Exception('Email is not exist');
+    } on PostgrestException catch (e) {
+      debugPrint('AuthService._ensureEmailExistsInUsersTableOrThrow failed: ${e.message} (code: ${e.code})');
+      if ((e.code ?? '').toString() == '42501') {
+        throw Exception('Unable to validate email (RLS blocked public.users).');
+      }
+      throw Exception('Unable to validate email. Please try again.');
+    } catch (e) {
+      debugPrint('AuthService._ensureEmailExistsInUsersTableOrThrow failed: $e');
+      rethrow;
+    }
+  }
+
   Future<AppUser> signIn({required String email, required String password}) async {
     _isLoading = true;
     notifyListeners();
     try {
       final normalized = email.trim();
-      final res = await SupabaseConfig.auth
-          .signInWithPassword(email: normalized, password: password)
-          .timeout(_authTimeout);
+      await _ensureEmailExistsInUsersTableOrThrow(email: normalized);
+
+      final res = await SupabaseConfig.auth.signInWithPassword(email: normalized, password: password).timeout(_authTimeout);
       final supaUser = res.user;
       if (supaUser == null) throw Exception('Sign in failed. Please try again.');
       final profile = await _loadOrCreateProfile(supaUser, displayNameHint: null);
@@ -800,6 +823,10 @@ class AuthService extends ChangeNotifier {
       return profile;
     } on AuthException catch (e) {
       debugPrint('AuthService.signIn auth error: ${e.message}');
+      final lower = e.message.trim().toLowerCase();
+      if (lower.contains('invalid login credentials')) {
+        throw Exception('Password is incorrect');
+      }
       throw Exception(_friendlyAuthMessage(e));
     } catch (e) {
       debugPrint('AuthService.signIn failed: $e');
