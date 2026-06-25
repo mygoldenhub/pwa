@@ -41,7 +41,13 @@ class ProductService extends ChangeNotifier {
         ..clear()
         ..addAll(parsed);
     } catch (e) {
+      // This app primarily uses Xero-backed products. Some Supabase projects won't have
+      // a public.products table; treat that as "no local products" instead of crashing.
       debugPrint('ProductService.refresh failed: $e');
+      if (_looksLikeMissingTableError(e)) {
+        _products.clear();
+        return;
+      }
       rethrow;
     } finally {
       _isLoading = false;
@@ -76,6 +82,7 @@ class ProductService extends ChangeNotifier {
       await refresh();
     } catch (e) {
       debugPrint('ProductService.upsert failed: $e');
+      if (_looksLikeMissingTableError(e)) return;
       rethrow;
     } finally {
       _isLoading = false;
@@ -91,11 +98,19 @@ class ProductService extends ChangeNotifier {
       _products.removeWhere((p) => p.id == id);
     } catch (e) {
       debugPrint('ProductService.deleteById failed: $e');
+      if (_looksLikeMissingTableError(e)) return;
       rethrow;
     } finally {
       _isLoading = false;
       notifyListeners();
     }
+  }
+
+  bool _looksLikeMissingTableError(Object e) {
+    final msg = e.toString().toLowerCase();
+    return msg.contains("could not find the table") ||
+        msg.contains('relation "public.products" does not exist') ||
+        msg.contains('relation "products" does not exist');
   }
 
   static String generateUuidV4() {

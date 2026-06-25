@@ -946,6 +946,31 @@ class AuthService extends ChangeNotifier {
       final normalized = email.trim().toLowerCase();
       if (normalized.isEmpty || !normalized.contains('@')) throw Exception('Please enter a valid email.');
 
+      // Prevent sending recovery codes for unknown emails.
+      // NOTE: Supabase's Auth recovery endpoint intentionally does not reveal whether
+      // an email exists (to avoid enumeration). Since your UX requirement is to
+      // show an explicit message, we check your `public.users` table first.
+      //
+      // If RLS prevents this lookup (common when not authenticated), we fall back
+      // to sending the recovery email anyway.
+      try {
+        final row = await SupabaseService.selectSingle(
+          'users',
+          select: 'id',
+          filters: {'email': normalized},
+          timeout: _authTimeout,
+        );
+        if (row == null) throw Exception('Email is not exist');
+      } catch (e) {
+        final msg = e.toString().toLowerCase();
+        final looksLikeRls = msg.contains('permission denied') || msg.contains('rls') || msg.contains('not authorized') || msg.contains('jwt');
+        if (looksLikeRls) {
+          debugPrint('AuthService.requestPasswordResetCode: email existence check blocked by RLS; proceeding to send recovery email. Error: $e');
+        } else {
+          rethrow;
+        }
+      }
+
       // Use Supabase's password-recovery flow.
       // This sends a recovery OTP / link using your Supabase SMTP settings.
       await SupabaseConfig.auth.resetPasswordForEmail(normalized).timeout(_authTimeout);
