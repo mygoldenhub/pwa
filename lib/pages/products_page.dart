@@ -201,25 +201,6 @@ class _ProductsPageState extends State<ProductsPage> {
       );
   }
 
-  void _showDeletedNotification() {
-    final cs = Theme.of(context).colorScheme;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          behavior: SnackBarBehavior.floating,
-          showCloseIcon: true,
-          margin: const EdgeInsets.all(AppSpacing.lg),
-          content: Row(
-            children: [
-              Icon(Icons.delete_outline, color: cs.onInverseSurface),
-              const SizedBox(width: AppSpacing.sm),
-              const Expanded(child: Text('Product deleted')),
-            ],
-          ),
-        ),
-      );
-  }
 
   @override
   void didChangeDependencies() {

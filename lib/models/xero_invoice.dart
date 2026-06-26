@@ -159,7 +159,7 @@ class XeroInvoice {
 
   static XeroInvoice? fromJson(dynamic json) {
     if (json is! Map) return null;
-    final map = Map<String, dynamic>.from(json as Map);
+    final map = Map<String, dynamic>.from(json);
     final invoiceId = map['invoice_id']?.toString();
     if (invoiceId == null || invoiceId.isEmpty) return null;
 

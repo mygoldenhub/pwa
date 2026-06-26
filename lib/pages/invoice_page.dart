@@ -150,7 +150,7 @@ class _InvoicePageState extends State<InvoicePage> {
 
   void _sortInvoicesByUpdatedDateUtc() {
     DateTime key(XeroInvoice i) => i.updatedDateUtc ?? i.date ?? DateTime.fromMillisecondsSinceEpoch(0);
-    String tie(XeroInvoice i) => (i.invoiceId ?? i.invoiceNum ?? '').toString();
+    String tie(XeroInvoice i) => (i.invoiceId).toString();
 
     _invoices.sort((a, b) {
       final c = key(b).compareTo(key(a));
@@ -160,7 +160,7 @@ class _InvoicePageState extends State<InvoicePage> {
   }
 
   String _invoiceDedupeKey(XeroInvoice i) {
-    final id = (i.invoiceId ?? '').trim();
+    final id = (i.invoiceId).trim();
     if (id.isNotEmpty) return id;
     final num = (i.invoiceNum ?? '').trim();
     final ref = (i.reference ?? '').trim();

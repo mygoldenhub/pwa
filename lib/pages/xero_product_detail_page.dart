@@ -227,6 +227,7 @@ class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
   }
 }
 
+// ignore: unused_element
 class _InfoRow extends StatelessWidget {
   final String label;
   final String value;

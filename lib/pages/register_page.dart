@@ -134,7 +134,7 @@ class _RegisterPageState extends State<RegisterPage> {
       if (code.trim().length != 6 || code.trim().contains(RegExp(r'\D'))) throw Exception('Please enter the 6-digit code.');
       if (pin.trim().length != 4 || pin.trim().contains(RegExp(r'\D'))) throw Exception('PIN must be exactly 4 digits.');
 
-      final result = await widget.appState.auth.verifySignupEmailCode(
+      await widget.appState.auth.verifySignupEmailCode(
         email: normalizedEmail,
         displayName: displayName,
         companyName: companyName,

@@ -43,7 +43,6 @@ class _WelcomePageState extends State<WelcomePage> {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final isBusy = widget.appState.auth.isLoading;
     final size = MediaQuery.sizeOf(context);
     final isCompactHeight = size.height < 740;
@@ -56,6 +55,7 @@ class _WelcomePageState extends State<WelcomePage> {
               _resolveBackgroundAsset(context),
               fit: BoxFit.cover,
               errorBuilder: (context, error, stackTrace) {
+                final cs = Theme.of(context).colorScheme;
                 debugPrint('WelcomePage background asset missing: $error');
                 return DecoratedBox(
                   decoration: BoxDecoration(
@@ -156,8 +156,6 @@ class _WelcomeBrandHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0.0, end: 1.0),
       duration: const Duration(milliseconds: 480),
@@ -227,8 +225,6 @@ class _EntryGateCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-
     return Container(
       padding: EdgeInsets.fromLTRB(
         AppSpacing.lg,

@@ -336,6 +336,7 @@ class _ProfileCard extends StatelessWidget {
   }
 }
 
+// ignore: unused_element
 class _ReadOnlyField extends StatelessWidget {
   final String label;
   final String value;

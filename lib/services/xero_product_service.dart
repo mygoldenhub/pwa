@@ -266,17 +266,6 @@ class XeroProductService {
     return tokens.where(seen.add).toList();
   }
 
-  static Iterable<XeroProduct> _mergeUniqueById(List<XeroProduct> first, List<XeroProduct> second) sync* {
-    final seen = <String>{};
-    for (final p in first) {
-      if (p.xeroItemId.isEmpty) continue;
-      if (seen.add(p.xeroItemId)) yield p;
-    }
-    for (final p in second) {
-      if (p.xeroItemId.isEmpty) continue;
-      if (seen.add(p.xeroItemId)) yield p;
-    }
-  }
 
   // Note: previously this service implemented an "ordered subsequence" matcher
   // ("%m%a%p%e%i%") which is great for fuzzy search, but it does NOT satisfy

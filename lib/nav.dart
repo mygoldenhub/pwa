@@ -45,7 +45,6 @@ class AppRouter {
 
         final isLoading = path == AppRoutes.loading;
         final isAuth = path == AppRoutes.welcome || path == AppRoutes.login || path == AppRoutes.register || path == AppRoutes.verifyEmail || path == AppRoutes.resetPassword;
-        final isNewPassword = path == AppRoutes.newPassword;
         final isApp = path.startsWith('/app');
 
         final isRecoveryFlow = state.uri.queryParameters['flow'] == 'recovery';

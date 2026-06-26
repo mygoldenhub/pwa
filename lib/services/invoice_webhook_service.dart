@@ -43,7 +43,6 @@ class InvoiceWebhookService {
     if (contactId.trim().isEmpty) throw 'Missing contactID (users.xero_account_id).';
     if (cartItems.isEmpty) throw 'Your cart is empty.';
 
-    final uri = _webhookUri();
     final payload = <String, dynamic>{
       'reference': draft.reference,
       'currency_code': draft.currencyCode,
