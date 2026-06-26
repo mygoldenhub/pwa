@@ -752,33 +752,8 @@ class AuthService extends ChangeNotifier {
   }
 
   void _validatePasswordOrThrow(String password) {
-    final p = password.trim();
-    if (p.length < 8) throw Exception('Password must be at least 8 characters.');
-
-    // Basic strength rules (simple + deterministic; avoids extra packages).
-    final hasLower = p.contains(RegExp(r'[a-z]'));
-    final hasUpper = p.contains(RegExp(r'[A-Z]'));
-    final hasDigit = p.contains(RegExp(r'\d'));
-    if (!(hasLower && hasUpper && hasDigit)) {
-      throw Exception('Password is too easy. Use upper, lower, and a number.');
-    }
-
-    // Very common passwords / patterns.
-    final lower = p.toLowerCase();
-    const banned = <String>{
-      'password',
-      'password1',
-      'password123',
-      '12345678',
-      '87654321',
-      'qwertyui',
-      'qwerty123',
-      'iloveyou',
-      'admin123',
-    };
-    if (banned.contains(lower) || lower.contains('password')) {
-      throw Exception('Password is too easy. Please choose a stronger password.');
-    }
+    final err = passwordPolicyError(password);
+    if (err != null) throw Exception(err);
   }
 
   Future<void> _ensureEmailExistsInUsersTableOrThrow({required String email}) async {
@@ -1055,7 +1030,8 @@ class AuthService extends ChangeNotifier {
     notifyListeners();
     try {
       final p = newPassword.trim();
-      if (p.length < 6) throw Exception('Password must be at least 6 characters.');
+      final policyError = passwordPolicyError(p);
+      if (policyError != null) throw Exception(policyError);
 
       // Must have a session from verifyOTP(recovery).
       final currentUser = SupabaseConfig.auth.currentUser;
@@ -1095,6 +1071,74 @@ class AuthService extends ChangeNotifier {
       _isLoading = false;
       notifyListeners();
     }
+  }
+
+  /// Returns a human-friendly password policy error, or null if the password is OK.
+  ///
+  /// Policy:
+  /// - Minimum 8 characters
+  /// - Must include letters and numbers
+  /// - Rejects extremely common / sequential numeric passwords (e.g. 12345678)
+  String? passwordPolicyError(String password) => AuthService.passwordPolicyErrorStatic(password);
+
+  static String? passwordPolicyErrorStatic(String password) {
+    final p = password.trim();
+    if (p.length < 8) return 'Password must be at least 8 characters.';
+
+    // Required character classes.
+    final hasLower = RegExp(r'[a-z]').hasMatch(p);
+    final hasUpper = RegExp(r'[A-Z]').hasMatch(p);
+    final hasNumber = RegExp(r'\d').hasMatch(p);
+    if (!(hasLower && hasUpper && hasNumber)) {
+      return 'Password must contain upper, lower, and a number.';
+    }
+
+    final lower = p.toLowerCase();
+    const common = <String>{
+      'password',
+      'password1',
+      'password123',
+      'qwerty',
+      'qwertyui',
+      'qwerty123',
+      'letmein',
+      'admin123',
+      'welcome',
+      'iloveyou',
+      '12345678',
+      '87654321',
+      '00000000',
+      '11111111',
+      '22222222',
+      '33333333',
+    };
+    if (common.contains(lower) || lower.contains('password')) {
+      return 'Password is too easy. Please choose a stronger password.';
+    }
+
+    // Reject sequential digits like 12345678 / 87654321.
+    if (RegExp(r'^\d+$').hasMatch(p) && _isSequentialDigits(p)) {
+      return 'Password is too easy. Please choose a stronger password.';
+    }
+
+    // Reject repeated single-character passwords like aaaaaaaa / !!!!!!!!
+    if (p.split('').toSet().length == 1) {
+      return 'Password is too easy. Please choose a stronger password.';
+    }
+
+    return null;
+  }
+
+  static bool _isSequentialDigits(String p) {
+    if (p.length < 3) return false;
+    final digits = p.split('').map(int.parse).toList(growable: false);
+    int? step;
+    for (var i = 1; i < digits.length; i++) {
+      final d = digits[i] - digits[i - 1];
+      step ??= d;
+      if (d != step) return false;
+    }
+    return step == 1 || step == -1;
   }
 
   Future<void> signOut() async {

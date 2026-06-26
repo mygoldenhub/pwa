@@ -36,8 +36,9 @@ class _NewPasswordPageState extends State<NewPasswordPage> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter your new password.')));
       return;
     }
-    if (p1.length < 6) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Password must be at least 6 characters.')));
+    final policyError = widget.appState.auth.passwordPolicyError(p1);
+    if (policyError != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(policyError)));
       return;
     }
     if (p1 != p2) {
@@ -78,6 +79,11 @@ class _NewPasswordPageState extends State<NewPasswordPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          Text(
+            'Must be at least 8 characters and include upper, lower, and a number.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+          ),
+          const SizedBox(height: AppSpacing.md),
           TextField(
             controller: _newPasswordController,
             obscureText: true,

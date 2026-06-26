@@ -83,7 +83,28 @@ function validatePin(pin: string) {
 
 function validatePassword(password: string) {
   const p = password.trim();
-  if (p.length < 6) throw new Error("password must be at least 6 characters");
+  if (p.length < 8) throw new Error("password must be at least 8 characters");
+
+  const hasLetter = /[A-Za-z]/.test(p);
+  const hasNumber = /\d/.test(p);
+  if (!hasLetter || !hasNumber) throw new Error("password is too easy; use both letters and numbers");
+
+  const common = new Set([
+    "password",
+    "password1",
+    "qwerty",
+    "qwerty123",
+    "letmein",
+    "admin123",
+    "welcome",
+    "iloveyou",
+    "12345678",
+    "87654321",
+    "00000000",
+    "11111111",
+  ]);
+  if (common.has(p.toLowerCase())) throw new Error("password is too easy; choose a stronger password");
+
   return p;
 }
 
