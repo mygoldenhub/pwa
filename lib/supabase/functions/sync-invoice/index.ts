@@ -221,7 +221,6 @@ Deno.serve(async (req: Request) => {
         has_attachments: parseBool(invoice.HasAttachments),
 
         contact: contactForDB(invoice.Contact),
-        contact_id: contactForDB(invoice.Contact).contact_id,
 
         date_string: toDateKeepString(invoice.Date),
         date: parseDate(invoice.Date),
