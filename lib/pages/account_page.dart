@@ -17,6 +17,66 @@ class AccountPage extends StatefulWidget {
 class _AccountPageState extends State<AccountPage> {
   bool _busy = false;
 
+  Future<T?> _showCenteredModal<T>({required Widget child}) {
+    final cs = Theme.of(context).colorScheme;
+    return showGeneralDialog<T>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+      barrierColor: Colors.black.withValues(alpha: 0.45),
+      transitionDuration: const Duration(milliseconds: 180),
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return LayoutBuilder(
+          builder: (context, viewport) {
+            final viewInsets = MediaQuery.viewInsetsOf(context);
+            final safePadding = MediaQuery.paddingOf(context);
+
+            // Keep generous padding on all devices, but also ensure we still
+            // have enough space on very small screens / when keyboard is open.
+            final outerPadding = EdgeInsets.fromLTRB(
+              AppSpacing.lg,
+              AppSpacing.lg + safePadding.top,
+              AppSpacing.lg,
+              AppSpacing.lg + safePadding.bottom + viewInsets.bottom,
+            );
+
+            final rawMaxHeight = viewport.maxHeight - outerPadding.vertical;
+            final maxHeight = rawMaxHeight < 0 ? 0.0 : rawMaxHeight;
+
+            return AnimatedPadding(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic,
+              padding: outerPadding,
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: 560, maxHeight: maxHeight),
+                  child: Material(
+                    color: cs.surface,
+                    borderRadius: BorderRadius.circular(AppRadius.xl),
+                    clipBehavior: Clip.antiAlias,
+                    child: Scrollbar(
+                      child: SingleChildScrollView(
+                        primary: false,
+                        child: child,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+        return FadeTransition(
+          opacity: curved,
+          child: ScaleTransition(scale: Tween<double>(begin: 0.98, end: 1).animate(curved), child: child),
+        );
+      },
+    );
+  }
+
   Future<void> _run(Future<void> Function() op) async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -35,22 +95,10 @@ class _AccountPageState extends State<AccountPage> {
   }
 
   Future<void> _showUpdatePasswordFlow() async {
-    final currentPassword = await showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      builder: (context) => _PasswordGateSheet(auth: widget.appState.auth),
-    );
+    final currentPassword = await _showCenteredModal<String>(child: _PasswordGateSheet(auth: widget.appState.auth));
     if (!mounted || currentPassword == null) return;
 
-    final newPassword = await showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      builder: (context) => const _UpdatePasswordSheet(),
-    );
+    final newPassword = await _showCenteredModal<String>(child: const _UpdatePasswordSheet());
     if (!mounted || newPassword == null) return;
 
     await _run(() async {
@@ -61,22 +109,10 @@ class _AccountPageState extends State<AccountPage> {
   }
 
   Future<void> _showUpdatePinFlow() async {
-    final currentPassword = await showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      builder: (context) => _PasswordGateSheet(auth: widget.appState.auth),
-    );
+    final currentPassword = await _showCenteredModal<String>(child: _PasswordGateSheet(auth: widget.appState.auth));
     if (!mounted || currentPassword == null) return;
 
-    final newPin = await showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      builder: (context) => const _UpdatePinSheet(),
-    );
+    final newPin = await _showCenteredModal<String>(child: const _UpdatePinSheet());
     if (!mounted || newPin == null) return;
 
     await _run(() async {

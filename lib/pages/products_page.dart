@@ -42,15 +42,16 @@ class AppModalSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 560),
-        child: Material(
-          color: cs.surface,
-          clipBehavior: Clip.antiAlias,
-          shape: RoundedRectangleBorder(borderRadius: borderRadius),
-          child: Padding(padding: padding, child: child),
-        ),
+    // Important: don't wrap with Center here.
+    // A full-screen Center/Align is hit-testable and can prevent the route's
+    // modal barrier from receiving outside taps (breaking tap-to-dismiss).
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 560),
+      child: Material(
+        color: cs.surface,
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(borderRadius: borderRadius),
+        child: Padding(padding: padding, child: child),
       ),
     );
   }
@@ -284,11 +285,42 @@ class _ProductsPageState extends State<ProductsPage> {
 
   Future<void> _openScanChooser() async {
     final cs = Theme.of(context).colorScheme;
-    final choice = await showDialog<_ScanChoice>(
+    // Use an explicitly dismissible dialog route so tapping outside the modal
+    // always closes it (especially on web where nested navigators can make
+    // dismissal feel inconsistent).
+    final choice = await showGeneralDialog<_ScanChoice>(
       context: context,
       barrierDismissible: true,
+      barrierLabel: 'Dismiss',
       barrierColor: cs.scrim.withValues(alpha: 0.52),
-      builder: (context) => const AppCenteredModalDialog(child: _ScanChoiceSheet()),
+      transitionDuration: const Duration(milliseconds: 180),
+      pageBuilder: (context, animation, secondaryAnimation) {
+        // Some full-screen widgets (e.g. Center/Align) can swallow taps, making
+        // the framework barrier dismiss unreliable. We add an explicit
+        // tap-to-dismiss layer to guarantee the desired behavior.
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => Navigator.of(context).pop(),
+                child: const SizedBox.shrink(),
+              ),
+            ),
+            const Center(child: AppCenteredModalDialog(child: _ScanChoiceSheet())),
+          ],
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+        return FadeTransition(
+          opacity: curved,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.98, end: 1).animate(curved),
+            child: child,
+          ),
+        );
+      },
     );
 
     if (!mounted || choice == null) return;
