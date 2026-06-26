@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/app_state.dart';
 import 'package:pwa/components/auth_scaffold.dart';
@@ -214,6 +213,7 @@ class _RegisterPageState extends State<RegisterPage> {
                 child: TextField(
                   controller: _codeController,
                   keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                   decoration: const InputDecoration(
                     labelText: 'Verify code',
                     prefixIcon: Icon(Icons.shield_outlined),
@@ -262,7 +262,9 @@ class _RegisterPageState extends State<RegisterPage> {
           const SizedBox(height: AppSpacing.md),
           TextField(
             controller: _pinController,
-            keyboardType: TextInputType.number,
+            keyboardType: const TextInputType.numberWithOptions(signed: false, decimal: false),
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(4)],
+            obscureText: true,
             decoration: const InputDecoration(
               labelText: 'PIN (4 digits)',
               prefixIcon: Icon(Icons.pin_outlined),

@@ -7,6 +7,7 @@ import 'package:pwa/supabase/supabase_config.dart';
 class ProductService extends ChangeNotifier {
   bool _isInitialized = false;
   bool _isLoading = false;
+  bool _productsTableAvailable = true;
   final List<Product> _products = [];
 
   bool get isInitialized => _isInitialized;
@@ -29,6 +30,15 @@ class ProductService extends ChangeNotifier {
   }
 
   Future<void> refresh() async {
+    if (!_productsTableAvailable) {
+      // Some deployments use only Xero-backed products and don't provision a
+      // Supabase-backed products table.
+      if (_products.isNotEmpty) {
+        _products.clear();
+        notifyListeners();
+      }
+      return;
+    }
     _isLoading = true;
     notifyListeners();
     try {
@@ -43,11 +53,13 @@ class ProductService extends ChangeNotifier {
     } catch (e) {
       // This app primarily uses Xero-backed products. Some Supabase projects won't have
       // a public.products table; treat that as "no local products" instead of crashing.
-      debugPrint('ProductService.refresh failed: $e');
       if (_looksLikeMissingTableError(e)) {
+        _productsTableAvailable = false;
+        debugPrint('ProductService.refresh: products table missing; disabling Supabase-backed products. Error: $e');
         _products.clear();
         return;
       }
+      debugPrint('ProductService.refresh failed: $e');
       rethrow;
     } finally {
       _isLoading = false;
@@ -63,6 +75,7 @@ class ProductService extends ChangeNotifier {
   }
 
   Future<void> upsert(Product product) async {
+    if (!_productsTableAvailable) return;
     _isLoading = true;
     notifyListeners();
     try {
@@ -82,7 +95,10 @@ class ProductService extends ChangeNotifier {
       await refresh();
     } catch (e) {
       debugPrint('ProductService.upsert failed: $e');
-      if (_looksLikeMissingTableError(e)) return;
+      if (_looksLikeMissingTableError(e)) {
+        _productsTableAvailable = false;
+        return;
+      }
       rethrow;
     } finally {
       _isLoading = false;
@@ -91,6 +107,7 @@ class ProductService extends ChangeNotifier {
   }
 
   Future<void> deleteById(String id) async {
+    if (!_productsTableAvailable) return;
     _isLoading = true;
     notifyListeners();
     try {
@@ -98,7 +115,10 @@ class ProductService extends ChangeNotifier {
       _products.removeWhere((p) => p.id == id);
     } catch (e) {
       debugPrint('ProductService.deleteById failed: $e');
-      if (_looksLikeMissingTableError(e)) return;
+      if (_looksLikeMissingTableError(e)) {
+        _productsTableAvailable = false;
+        return;
+      }
       rethrow;
     } finally {
       _isLoading = false;

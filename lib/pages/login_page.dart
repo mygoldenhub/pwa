@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/app_state.dart';
 import 'package:pwa/components/auth_scaffold.dart';
@@ -115,7 +116,8 @@ class _LoginPageState extends State<LoginPage> {
           ] else ...[
             TextField(
               controller: _pinController,
-              keyboardType: TextInputType.number,
+              keyboardType: const TextInputType.numberWithOptions(signed: false, decimal: false),
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(4)],
               obscureText: true,
               maxLength: 4,
               buildCounter: (context, {required currentLength, required isFocused, maxLength}) => null,
