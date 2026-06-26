@@ -18,6 +18,9 @@ class _NewPasswordPageState extends State<NewPasswordPage> {
   final _newPasswordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
 
+  bool _showNewPassword = false;
+  bool _showConfirmPassword = false;
+
   @override
   void dispose() {
     _newPasswordController.dispose();
@@ -86,15 +89,36 @@ class _NewPasswordPageState extends State<NewPasswordPage> {
           const SizedBox(height: AppSpacing.md),
           TextField(
             controller: _newPasswordController,
-            obscureText: true,
-            decoration: const InputDecoration(labelText: 'New Password', prefixIcon: Icon(Icons.password)),
+            obscureText: !_showNewPassword,
+            decoration: InputDecoration(
+              labelText: 'New Password',
+              prefixIcon: const Icon(Icons.password),
+              suffixIcon: IconButton(
+                tooltip: _showNewPassword ? 'Hide password' : 'Show password',
+                onPressed: () => setState(() => _showNewPassword = !_showNewPassword),
+                style: IconButton.styleFrom(splashFactory: NoSplash.splashFactory),
+                icon: Icon(_showNewPassword ? Icons.visibility_off_outlined : Icons.visibility_outlined, color: cs.onSurfaceVariant),
+              ),
+            ),
             textInputAction: TextInputAction.next,
           ),
           const SizedBox(height: AppSpacing.md),
           TextField(
             controller: _confirmPasswordController,
-            obscureText: true,
-            decoration: const InputDecoration(labelText: 'Confirm Password', prefixIcon: Icon(Icons.password_outlined)),
+            obscureText: !_showConfirmPassword,
+            decoration: InputDecoration(
+              labelText: 'Confirm Password',
+              prefixIcon: const Icon(Icons.password_outlined),
+              suffixIcon: IconButton(
+                tooltip: _showConfirmPassword ? 'Hide password' : 'Show password',
+                onPressed: () => setState(() => _showConfirmPassword = !_showConfirmPassword),
+                style: IconButton.styleFrom(splashFactory: NoSplash.splashFactory),
+                icon: Icon(
+                  _showConfirmPassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                  color: cs.onSurfaceVariant,
+                ),
+              ),
+            ),
             textInputAction: TextInputAction.done,
             onSubmitted: (_) => _updatePassword(),
           ),

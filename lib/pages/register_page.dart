@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/app_state.dart';
 import 'package:pwa/components/auth_scaffold.dart';
@@ -249,7 +251,8 @@ class _RegisterPageState extends State<RegisterPage> {
           const SizedBox(height: AppSpacing.md),
           TextField(
             controller: _phoneController,
-            keyboardType: TextInputType.phone,
+            keyboardType: const TextInputType.numberWithOptions(signed: false, decimal: false),
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
             decoration: const InputDecoration(
               labelText: 'Phone number',
               prefixIcon: Icon(Icons.phone_outlined),
