@@ -209,7 +209,11 @@ Deno.serve(async (req) => {
     // shape, in case the Make.com "Webhook response" module ever gets
     // reconfigured to wrap the array that way.
     if (!Array.isArray(rawResponse) || rawResponse.length === 0) {
-      throw new Error("Data received from Make.com is not a non-empty array");
+      return jsonResponse({
+        success: true,
+        message:
+          `No changes in the last 2 hours.`,
+      });
     }
 
     let xeroData: XeroItem[];
