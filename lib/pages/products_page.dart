@@ -223,33 +223,7 @@ class _ProductsPageState extends State<ProductsPage> {
   }
 
   Future<void> _openViaBarcode() async {
-    final barcodeOrCode = await context.push<String?>(AppRoutes.barcodeScan);
-    if (!mounted || barcodeOrCode == null || barcodeOrCode.trim().isEmpty) return;
-    final found = await XeroProductService.getByCode(barcodeOrCode.trim());
-    if (!mounted) return;
-
-    if (found == null) {
-      final cs = Theme.of(context).colorScheme;
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(
-            behavior: SnackBarBehavior.floating,
-            showCloseIcon: true,
-            margin: const EdgeInsets.all(AppSpacing.lg),
-            content: Row(
-              children: [
-                Icon(Icons.search_off, color: cs.onInverseSurface),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(child: Text('No Xero product found for “${barcodeOrCode.trim()}”')),
-              ],
-            ),
-          ),
-        );
-      return;
-    }
-
-    context.push(AppRoutes.xeroProduct(found.xeroItemId));
+    await context.push(AppRoutes.barcodeScan);
   }
 
   Future<void> _openViaProductName() async {

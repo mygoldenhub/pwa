@@ -16,23 +16,16 @@ class ProductService extends ChangeNotifier {
 
   Future<void> init() async {
     if (_isInitialized) return;
-    _isLoading = true;
+    // Scan & Go's live catalog is xero_products. Skip probing public.products so
+    // Xero-only Supabase projects don't log a missing-table error on every launch.
+    _productsTableAvailable = false;
+    _isInitialized = true;
     notifyListeners();
-    try {
-      await refresh();
-    } catch (e) {
-      debugPrint('ProductService.init failed: $e');
-    } finally {
-      _isInitialized = true;
-      _isLoading = false;
-      notifyListeners();
-    }
   }
 
   Future<void> refresh() async {
     if (!_productsTableAvailable) {
-      // Some deployments use only Xero-backed products and don't provision a
-      // Supabase-backed products table.
+      // Xero-only deployments never provision public.products.
       if (_products.isNotEmpty) {
         _products.clear();
         notifyListeners();
@@ -51,11 +44,9 @@ class ProductService extends ChangeNotifier {
         ..clear()
         ..addAll(parsed);
     } catch (e) {
-      // This app primarily uses Xero-backed products. Some Supabase projects won't have
-      // a public.products table; treat that as "no local products" instead of crashing.
+      // Cart / scan use xero_products. Missing public.products is expected.
       if (_looksLikeMissingTableError(e)) {
         _productsTableAvailable = false;
-        debugPrint('ProductService.refresh: products table missing; disabling Supabase-backed products. Error: $e');
         _products.clear();
         return;
       }

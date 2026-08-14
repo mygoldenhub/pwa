@@ -3,27 +3,91 @@ import 'package:go_router/go_router.dart';
 import 'package:pwa/components/app_header.dart';
 import 'package:pwa/components/quantity_input.dart';
 import 'package:pwa/models/xero_product.dart';
+import 'package:pwa/services/barcode_product_service.dart';
 import 'package:pwa/services/cart_service.dart';
 import 'package:pwa/services/xero_product_service.dart';
 import 'package:pwa/theme.dart';
 
+class _ProductLoadResult {
+  final XeroProduct? product;
+  final String? barcode;
+  final String? message;
+
+  const _ProductLoadResult({
+    this.product,
+    this.barcode,
+    this.message,
+  });
+}
+
 class XeroProductDetailPage extends StatefulWidget {
   final String xeroItemId;
-  const XeroProductDetailPage({super.key, required this.xeroItemId});
+  final String? barcode;
+
+  const XeroProductDetailPage({
+    super.key,
+    this.xeroItemId = '',
+    this.barcode,
+  });
 
   @override
   State<XeroProductDetailPage> createState() => _XeroProductDetailPageState();
 }
 
 class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
-  late Future<XeroProduct?> _future;
+  late Future<_ProductLoadResult> _future;
   int _quantity = 1;
   bool _isAdding = false;
+
+  String? get _scannedBarcode {
+    final value = widget.barcode?.trim();
+    if (value == null || value.isEmpty) return null;
+    return value;
+  }
+
+  bool get _fromBarcode => _scannedBarcode != null;
 
   @override
   void initState() {
     super.initState();
-    _future = XeroProductService.getByXeroItemId(widget.xeroItemId);
+    _future = _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant XeroProductDetailPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.xeroItemId != widget.xeroItemId || oldWidget.barcode != widget.barcode) {
+      _future = _load();
+    }
+  }
+
+  Future<_ProductLoadResult> _load() async {
+    final barcode = _scannedBarcode;
+    if (barcode != null) {
+      final lookup = await BarcodeProductService.lookup(barcode);
+      return _ProductLoadResult(
+        product: lookup.product,
+        barcode: lookup.barcode,
+        message: lookup.ok ? null : lookup.message,
+      );
+    }
+
+    final p = await XeroProductService.getByXeroItemId(widget.xeroItemId);
+    if (p == null) {
+      debugPrint('XeroProductDetailPage: product not found for ${widget.xeroItemId}');
+      return const _ProductLoadResult(
+        message: 'This item may have been removed from Xero or not synced yet.',
+      );
+    }
+    return _ProductLoadResult(product: p);
+  }
+
+  void _close() {
+    if (context.canPop()) {
+      context.pop();
+    } else {
+      context.go('/app/cart');
+    }
   }
 
   @override
@@ -35,39 +99,29 @@ class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
         actions: [
           IconButton(
             tooltip: 'Close',
-            onPressed: () => context.pop(),
+            onPressed: _close,
             icon: Icon(Icons.close, color: cs.onSurface),
           ),
         ],
       ),
       body: SafeArea(
-        child: FutureBuilder<XeroProduct?>(
+        child: FutureBuilder<_ProductLoadResult>(
           future: _future,
           builder: (context, snap) {
             if (snap.connectionState != ConnectionState.done) {
-              return const Center(child: CircularProgressIndicator());
+              return _LookupLoading(barcode: _scannedBarcode);
             }
-            final p = snap.data;
+            final result = snap.data;
+            final p = result?.product;
             if (p == null) {
-              debugPrint('XeroProductDetailPage: product not found for ${widget.xeroItemId}');
-              return Center(
-                child: Padding(
-                  padding: AppSpacing.paddingLg,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.search_off, color: cs.onSurfaceVariant, size: 40),
-                      const SizedBox(height: AppSpacing.sm),
-                      Text('Product not found', style: Theme.of(context).textTheme.titleLarge?.semiBold),
-                      const SizedBox(height: AppSpacing.xs),
-                      Text(
-                        'This item may have been removed from Xero or not synced yet.',
-                        style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
-                        textAlign: TextAlign.center,
-                      ),
-                    ],
-                  ),
-                ),
+              return _LookupEmpty(
+                barcode: result?.barcode ?? _scannedBarcode,
+                message: _fromBarcode
+                    ? null
+                    : (result?.message ?? 'This item may have been removed from Xero or not synced yet.'),
+                fromBarcode: _fromBarcode,
+                onScanAgain: () => context.go('/app/cart/scan'),
+                onClose: _close,
               );
             }
 
@@ -117,12 +171,18 @@ class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
                                 p.code == null || p.code!.isEmpty ? 'SKU: —' : 'SKU: ${p.code}',
                                 style: Theme.of(context).textTheme.titleLarge?.semiBold,
                               ),
+                              if ((result?.barcode ?? '').isNotEmpty) ...[
+                                const SizedBox(height: AppSpacing.xs),
+                                Text(
+                                  'Barcode: ${result!.barcode}',
+                                  style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
+                                ),
+                              ],
                               const SizedBox(height: AppSpacing.xl),
                               Text('Price: $priceText', style: Theme.of(context).textTheme.titleLarge?.semiBold),
                               const SizedBox(height: AppSpacing.xl),
                               LayoutBuilder(
                                 builder: (context, constraints) {
-                                  // Prevent overflow on narrow mobile widths by stacking the label + input.
                                   final isNarrow = constraints.maxWidth < 380;
                                   final label = Text('Quantity', style: Theme.of(context).textTheme.titleLarge?.semiBold);
                                   final input = Align(
@@ -175,12 +235,12 @@ class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
                               : () async {
                                   setState(() => _isAdding = true);
                                   try {
-                                     await CartService.addOrIncrementXeroProduct(product: p, quantity: _quantity);
+                                    await CartService.addOrIncrementXeroProduct(product: p, quantity: _quantity);
                                     if (!context.mounted) return;
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(content: Text('Added "${p.name}" × $_quantity')),
                                     );
-                                    context.pop();
+                                    _close();
                                   } catch (e) {
                                     debugPrint('XeroProductDetailPage: Add to cart failed: $e');
                                     if (!context.mounted) return;
@@ -211,7 +271,7 @@ class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
                       const SizedBox(height: AppSpacing.md),
                       Center(
                         child: TextButton(
-                          onPressed: () => context.pop(),
+                          onPressed: _close,
                           child: Text('Cancel', style: Theme.of(context).textTheme.titleMedium?.semiBold),
                         ),
                       ),
@@ -227,25 +287,113 @@ class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
   }
 }
 
-// ignore: unused_element
-class _InfoRow extends StatelessWidget {
-  final String label;
-  final String value;
-  const _InfoRow({required this.label, required this.value});
+class _LookupLoading extends StatelessWidget {
+  final String? barcode;
+  const _LookupLoading({this.barcode});
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 120,
-          child: Text(label, style: Theme.of(context).textTheme.bodySmall?.withColor(cs.onSurfaceVariant)),
+    return Center(
+      child: Padding(
+        padding: AppSpacing.paddingLg,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 56,
+              height: 56,
+              child: CircularProgressIndicator(strokeWidth: 3, color: cs.primary),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            Text(
+              'Looking up product…',
+              style: Theme.of(context).textTheme.titleMedium?.semiBold,
+              textAlign: TextAlign.center,
+            ),
+            if ((barcode ?? '').isNotEmpty) ...[
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                barcode!,
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.1,
+                    ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                'Matching barcode to Xero catalog',
+                style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ],
         ),
-        const SizedBox(width: AppSpacing.md),
-        Expanded(child: Text(value, style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurface))),
-      ],
+      ),
+    );
+  }
+}
+
+class _LookupEmpty extends StatelessWidget {
+  final String? barcode;
+  final String? message;
+  final bool fromBarcode;
+  final VoidCallback onScanAgain;
+  final VoidCallback onClose;
+
+  const _LookupEmpty({
+    required this.barcode,
+    required this.message,
+    required this.fromBarcode,
+    required this.onScanAgain,
+    required this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Center(
+      child: Padding(
+        padding: AppSpacing.paddingLg,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.search_off, color: cs.onSurfaceVariant, size: 40),
+            const SizedBox(height: AppSpacing.sm),
+            Text('Product not found', style: Theme.of(context).textTheme.titleLarge?.semiBold),
+            if ((barcode ?? '').isNotEmpty) ...[
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                barcode!,
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.8,
+                    ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+            if ((message ?? '').isNotEmpty) ...[
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                message!,
+                style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
+                textAlign: TextAlign.center,
+              ),
+            ],
+            if (fromBarcode) ...[
+              const SizedBox(height: AppSpacing.xl),
+              FilledButton.icon(
+                onPressed: onScanAgain,
+                icon: Icon(Icons.qr_code_scanner, color: cs.onPrimary),
+                label: Text('Scan again', style: TextStyle(color: cs.onPrimary)),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              TextButton(onPressed: onClose, child: const Text('Back to cart')),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }

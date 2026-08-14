@@ -67,3 +67,9 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/reset_password_code/deno.json"
 entrypoint = "./functions/reset_password_code/index.ts"
+
+[functions.get_product_frombarcode]
+enabled = true
+verify_jwt = false
+import_map = "./functions/get_product_frombarcode/deno.json"
+entrypoint = "./functions/get_product_frombarcode/index.ts"

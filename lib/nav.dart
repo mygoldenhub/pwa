@@ -5,6 +5,7 @@ import 'package:pwa/pages/account_page.dart';
 import 'package:pwa/pages/app_shell_page.dart';
 import 'package:pwa/pages/auth_callback_page.dart';
 import 'package:pwa/pages/barcode_scanner_page.dart';
+import 'package:pwa/pages/barcode_result_page.dart';
 import 'package:pwa/pages/invoice_page.dart';
 import 'package:pwa/pages/invoice_success_page.dart';
 import 'package:pwa/pages/loading_page.dart';
@@ -131,6 +132,13 @@ class AppRouter {
                       pageBuilder: (context, state) => const MaterialPage(child: BarcodeScannerPage()),
                     ),
                     GoRoute(
+                      path: 'barcode/:barcode',
+                      pageBuilder: (context, state) {
+                        final barcode = Uri.decodeComponent(state.pathParameters['barcode'] ?? '');
+                        return MaterialPage(child: BarcodeResultPage(barcode: barcode));
+                      },
+                    ),
+                    GoRoute(
                       path: 'new',
                       pageBuilder: (context, state) {
                         final extra = (state.extra is Map) ? (state.extra as Map) : const <String, dynamic>{};
@@ -226,6 +234,8 @@ class AppRoutes {
   static const String stripeCheckoutSuccess = '/app/stripe/success';
 
   static const String barcodeScan = '/app/cart/scan';
+  static String barcodeResult(String barcode) =>
+      '/app/cart/barcode/${Uri.encodeComponent(barcode)}';
   static const String productNew = '/app/cart/new';
   static String productEdit(String id) => '/app/cart/$id/edit';
   static String xeroProduct(String xeroItemId) => '/app/cart/xero/$xeroItemId';
