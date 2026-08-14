@@ -16,6 +16,10 @@ Future<bool> setWebTorch(bool enabled) async => false;
 
 Future<bool> webTorchSupported() async => false;
 
+bool webPreviewIsMirrored() => false;
+
+bool webIsAppleMobile() => false;
+
 WebCameraCapabilities probeWebCameraCapabilities() {
   return const WebCameraCapabilities.unsupported();
 }

@@ -24,5 +24,10 @@ Future<bool> setWebTorch(bool enabled) => impl.setWebTorch(enabled);
 
 Future<bool> webTorchSupported() => impl.webTorchSupported();
 
+/// True when the web camera preview is CSS-mirrored (front / desktop cameras).
+bool webPreviewIsMirrored() => impl.webPreviewIsMirrored();
+
+bool webIsAppleMobile() => impl.webIsAppleMobile();
+
 WebCameraCapabilities probeWebCameraCapabilities() =>
     impl.probeWebCameraCapabilities();

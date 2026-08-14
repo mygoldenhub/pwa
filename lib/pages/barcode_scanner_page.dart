@@ -56,9 +56,10 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
   /// Use Flutter preview zoom when hardware zoom is unavailable (typical on web).
   bool get _usePreviewZoom => kIsWeb ? !_webCaps.supportsZoom : false;
 
-  /// mobile_scanner mirrors desktop/web user-facing cameras with CSS scaleX(-1).
-  /// For barcode scanning we want a normal (unmirrored) preview.
-  bool get _unmirrorWebPreview => kIsWeb;
+  /// mobile_scanner CSS-mirrors front/desktop cameras. Only undo that mirror.
+  /// Rear cameras on phones are already unmirrored — flipping them again
+  /// would reverse the live preview and the white-frame crop.
+  bool get _unmirrorWebPreview => kIsWeb && webPreviewIsMirrored();
 
   Rect _guideRectFor(Size size) {
     // EAN-13 is wide and short — keep a wide horizontal capture band.
@@ -130,7 +131,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
   Future<void> _probeWebControls() async {
     await Future<void>.delayed(const Duration(milliseconds: 400));
     if (!mounted) return;
-    final caps = await enableContinuousCameraFocus();
+    var caps = await enableContinuousCameraFocus();
     if (!mounted) return;
 
     final nativeSupported = await _webPoller.isSupported;
@@ -138,6 +139,15 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
     setState(() {
       _webCaps = caps;
     });
+
+    // Capabilities (especially torch) can appear a moment after the track is live.
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    if (!mounted) return;
+    caps = probeWebCameraCapabilities();
+    if (caps.supportsTorch != _webCaps.supportsTorch ||
+        caps.supportsZoom != _webCaps.supportsZoom) {
+      setState(() => _webCaps = caps);
+    }
 
     // Parallel Chrome BarcodeDetector loop, cropped to the white frame only.
     if (nativeSupported && !_webPoller.isRunning) {
@@ -185,6 +195,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
     if (!mounted) return;
     _didReturn = true;
     _returnTimer?.cancel();
+    if (kIsWeb && _torchOn) unawaited(setWebTorch(false));
     _webPoller.stop();
     try {
       _controller.stop();
@@ -203,6 +214,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
     _didReturn = true;
     _returnTimer?.cancel();
     _liveClearTimer?.cancel();
+    if (kIsWeb && _torchOn) unawaited(setWebTorch(false));
     _webPoller.stop();
     HapticFeedback.mediumImpact();
     try {
@@ -348,33 +360,40 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
     _torchBusy = true;
     try {
       if (kIsWeb) {
-        // mobile_scanner does not support torch on web video tracks.
-        // Use the MediaTrack torch constraint when the device exposes it.
-        final caps = probeWebCameraCapabilities();
-        if (!caps.supportsTorch && !_webCaps.supportsTorch) {
+        // mobile_scanner does not support torch on web. Use MediaTrack
+        // constraints. Chrome on Android rear cameras expose `torch`.
+        if (webIsAppleMobile()) {
           if (!mounted) return;
           ScaffoldMessenger.of(context)
             ..hideCurrentSnackBar()
             ..showSnackBar(
               const SnackBar(
                 behavior: SnackBarBehavior.floating,
-                content: Text('Torch is not available on this camera/browser'),
+                content: Text(
+                  'Torch is not available in iPhone/iPad browsers. Use Chrome on Android, or the back camera.',
+                ),
               ),
             );
           return;
         }
+
         final next = !_torchOn;
         final ok = await setWebTorch(next);
         if (!mounted) return;
         if (ok) {
-          setState(() => _torchOn = next);
+          setState(() {
+            _torchOn = next;
+            _webCaps = probeWebCameraCapabilities();
+          });
         } else {
           ScaffoldMessenger.of(context)
             ..hideCurrentSnackBar()
             ..showSnackBar(
               const SnackBar(
                 behavior: SnackBarBehavior.floating,
-                content: Text('Unable to toggle torch on this camera'),
+                content: Text(
+                  'Torch needs the back camera in Chrome or a supported Android browser.',
+                ),
               ),
             );
         }
@@ -413,6 +432,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
 
   @override
   void dispose() {
+    if (kIsWeb && _torchOn) unawaited(setWebTorch(false));
     _liveClearTimer?.cancel();
     _returnTimer?.cancel();
     _webPoller.stop();

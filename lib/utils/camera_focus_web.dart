@@ -116,7 +116,39 @@ bool _focusSupported(Map<Object?, Object?>? caps) {
 
 bool _torchSupported(Map<Object?, Object?>? caps) {
   if (caps == null) return false;
-  return caps.containsKey('torch');
+  if (caps.containsKey('torch')) return true;
+  final fill = caps['fillLightMode'] ?? caps['fillLightModes'];
+  if (fill is List) {
+    return fill.map((e) => '$e'.toLowerCase()).any((m) => m == 'torch' || m == 'flash');
+  }
+  return false;
+}
+
+String? _facingModeOf(JSObject track) {
+  try {
+    final settings = track.callMethod('getSettings'.toJS);
+    final dart = settings?.dartify();
+    if (dart is Map) {
+      final mode = dart['facingMode']?.toString().trim();
+      if (mode != null && mode.isNotEmpty) return mode;
+    }
+  } catch (_) {}
+  return null;
+}
+
+bool _isAppleMobileWeb() {
+  try {
+    final nav = globalContext.getProperty('navigator'.toJS) as JSObject?;
+    if (nav == null) return false;
+    final ua = nav.getProperty('userAgent'.toJS)?.dartify()?.toString() ?? '';
+    final platform = nav.getProperty('platform'.toJS)?.dartify()?.toString() ?? '';
+    final iOSDevice = ua.contains('iPhone') || ua.contains('iPad') || ua.contains('iPod') || platform.contains('iPhone');
+    final touch = nav.getProperty('maxTouchPoints'.toJS)?.dartify();
+    final iPadOs = platform.contains('Mac') && touch is num && touch > 1;
+    return iOSDevice || iPadOs;
+  } catch (_) {
+    return false;
+  }
 }
 
 ({double min, double max})? _zoomRange(Map<Object?, Object?>? caps) {
@@ -249,22 +281,43 @@ Future<bool> setWebCameraZoom(double normalized) async {
 }
 
 /// Set flashlight when the browser camera exposes a torch constraint.
+/// Chrome on Android requires the `advanced: [{ torch }]` form.
 Future<bool> setWebTorch(bool enabled) async {
   var changed = false;
   for (final track in _liveVideoTracks()) {
     final caps = _capabilitiesOf(track);
-    if (!_torchSupported(caps)) continue;
+    final facing = _facingModeOf(track);
+    // Front cameras almost never have a torch — skip them so we don't fail
+    // the rear-camera track by applying a bad constraint first.
+    if (facing == 'user') continue;
 
-    final ok = await _applyIdeal(track, {'torch': enabled});
-    if (ok) {
-      changed = true;
-    } else {
-      changed = await _applyAdvanced(track, {'torch': enabled}) || changed;
+    final advertised = _torchSupported(caps);
+    if (!advertised && caps != null && caps.isNotEmpty && facing != 'environment') {
+      continue;
     }
+
+    // Chrome Android: advanced torch constraint is the one that actually works.
+    var ok = await _applyAdvanced(track, {'torch': enabled});
+    if (!ok) ok = await _applyIdeal(track, {'torch': enabled});
+    if (!ok && advertised) {
+      ok = await _applyAdvanced(track, {'fillLightMode': enabled ? 'torch' : 'off'});
+    }
+    if (ok) changed = true;
   }
   return changed;
 }
 
 Future<bool> webTorchSupported() async {
+  if (_isAppleMobileWeb()) return false;
   return probeWebCameraCapabilities().supportsTorch;
 }
+
+/// True when mobile_scanner CSS-mirrors the preview (front / desktop cameras).
+bool webPreviewIsMirrored() {
+  final tracks = _liveVideoTracks();
+  if (tracks.isEmpty) return false;
+  final mode = _facingModeOf(tracks.first);
+  return mode == 'user' || mode == null || mode.isEmpty;
+}
+
+bool webIsAppleMobile() => _isAppleMobileWeb();
