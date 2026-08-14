@@ -25,3 +25,5 @@ WebCameraCapabilities probeWebCameraCapabilities() {
 }
 
 Future<void> releaseWebCameraTracks() async {}
+
+void applyWebVideoPreviewStyle({required double zoom}) {}

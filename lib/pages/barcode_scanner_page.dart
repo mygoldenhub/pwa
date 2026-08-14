@@ -164,6 +164,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     setState(() {
       _webCaps = caps;
     });
+    _syncWebPreviewCss();
 
     // Capabilities (especially torch) can appear a moment after the track is live.
     await Future<void>.delayed(const Duration(milliseconds: 500));
@@ -173,6 +174,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
         caps.supportsZoom != _webCaps.supportsZoom) {
       setState(() => _webCaps = caps);
     }
+    _syncWebPreviewCss();
 
     // Parallel Chrome BarcodeDetector loop, cropped to the white frame only.
     if (nativeSupported && !_webPoller.isRunning) {
@@ -201,6 +203,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
       await releaseWebCameraTracks();
       if (!mounted || _didReturn) return;
       await start();
+      _syncWebPreviewCss();
     } catch (e) {
       debugPrint('Camera start failed, retrying after release: $e');
       try {
@@ -211,6 +214,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
       if (!mounted || _didReturn) return;
       try {
         await start();
+        _syncWebPreviewCss();
       } catch (e2) {
         debugPrint('Camera start retry failed: $e2');
         if (!mounted) return;
@@ -376,6 +380,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
   }) {
     final content = Stack(
       fit: StackFit.expand,
+      clipBehavior: Clip.none,
       children: [
         scanner,
         if (recognitionRect != null)
@@ -389,6 +394,11 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
       ],
     );
 
+    // Production Flutter web (CanvasKit/Skwasm) freezes HtmlElementView when a
+    // parent uses Transform or ClipRect. Keep the live <video> untransformed
+    // and apply zoom/un-mirror with CSS instead.
+    if (kIsWeb) return content;
+
     final sx = (_unmirrorWebPreview ? -1.0 : 1.0) * (_usePreviewZoom ? _previewZoomScale : 1.0);
     final sy = _usePreviewZoom ? _previewZoomScale : 1.0;
 
@@ -401,10 +411,16 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     );
   }
 
+  void _syncWebPreviewCss() {
+    if (!kIsWeb) return;
+    applyWebVideoPreviewStyle(zoom: _usePreviewZoom ? _previewZoomScale : 1.0);
+  }
+
   Future<void> _applyZoom(double normalized) async {
     final next = normalized.clamp(0.0, 1.0);
     setState(() => _zoom = next);
     _syncWebScanRegion();
+    _syncWebPreviewCss();
 
     if (kIsWeb && _webCaps.supportsZoom) {
       await setWebCameraZoom(next);
@@ -590,13 +606,20 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
                   },
                   child: Stack(
                     fit: StackFit.expand,
+                    clipBehavior: Clip.none,
                     children: [
-                      ClipRect(
-                        child: _buildCameraLayer(
+                      if (kIsWeb)
+                        _buildCameraLayer(
                           scanner: scanner,
                           recognitionRect: recognitionRect,
+                        )
+                      else
+                        ClipRect(
+                          child: _buildCameraLayer(
+                            scanner: scanner,
+                            recognitionRect: recognitionRect,
+                          ),
                         ),
-                      ),
                       Positioned.fill(
                         child: IgnorePointer(
                           child: CustomPaint(

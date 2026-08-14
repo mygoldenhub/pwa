@@ -18,6 +18,7 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="description" content="A new Flutter project.">
 
   <!-- iOS meta tags & icons -->
@@ -31,6 +32,20 @@
 
   <title>pwa</title>
   <link rel="manifest" href="manifest.json">
+  <style>
+    /* Keep the camera &lt;video&gt; as a live DOM layer. Flutter Clip/Transform
+       rasterizes HtmlElementView in production CanvasKit and freezes the preview. */
+    flt-platform-view,
+    flt-platform-view-slot {
+      overflow: hidden;
+    }
+    flt-platform-view video,
+    video {
+      object-fit: cover !important;
+      width: 100% !important;
+      height: 100% !important;
+    }
+  </style>
 </head>
 <body>
   <script src="flutter_bootstrap.js" async></script>

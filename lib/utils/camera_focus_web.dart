@@ -322,6 +322,32 @@ bool webPreviewIsMirrored() {
 
 bool webIsAppleMobile() => _isAppleMobileWeb();
 
+void applyWebVideoPreviewStyle({required double zoom}) {
+  final z = zoom.isFinite ? zoom.clamp(1.0, 8.0) : 1.0;
+  try {
+    final videos = _document.callMethod('querySelectorAll'.toJS, 'video'.toJS);
+    if (videos == null) return;
+    final list = videos as JSObject;
+    final length = _jsLength(list);
+    for (var i = 0; i < length; i++) {
+      final video = list.callMethod('item'.toJS, i.toJS);
+      if (video == null) continue;
+      final jsVideo = video as JSObject;
+      final stream = jsVideo.getProperty('srcObject'.toJS);
+      if (stream == null) continue;
+      final style = jsVideo.getProperty('style'.toJS);
+      if (style == null) continue;
+      final jsStyle = style as JSObject;
+      // Replace plugin CSS (scaleX(-1)) so Flutter Transform is not needed.
+      jsStyle.setProperty('transform'.toJS, 'scale($z, $z)'.toJS);
+      jsStyle.setProperty('transformOrigin'.toJS, 'center center'.toJS);
+      jsStyle.setProperty('objectFit'.toJS, 'cover'.toJS);
+      jsStyle.setProperty('width'.toJS, '100%'.toJS);
+      jsStyle.setProperty('height'.toJS, '100%'.toJS);
+    }
+  } catch (_) {}
+}
+
 /// Stop live camera tracks and detach them from <video> elements.
 /// Needed because mobile_scanner on web often leaves getUserMedia running,
 /// which blocks the next visit from opening the camera.

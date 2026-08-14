@@ -34,3 +34,8 @@ WebCameraCapabilities probeWebCameraCapabilities() =>
 
 /// Stop leftover getUserMedia tracks so the camera can start again.
 Future<void> releaseWebCameraTracks() => impl.releaseWebCameraTracks();
+
+/// Zoom / un-mirror the live &lt;video&gt; with CSS.
+/// Flutter Transform/ClipRect freeze HtmlElementView in production CanvasKit.
+void applyWebVideoPreviewStyle({required double zoom}) =>
+    impl.applyWebVideoPreviewStyle(zoom: zoom);
