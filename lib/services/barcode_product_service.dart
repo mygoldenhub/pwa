@@ -102,7 +102,7 @@ class BarcodeProductService {
         product: null,
         error: 'lookup_failed',
         message: unreachable
-            ? 'Product lookup is unreachable. Deploy get_product_frombarcode and keep ARDEX Barcodes.xlsx in Storage bucket Barcode_Info.'
+            ? 'Product lookup is unreachable. Deploy get_product_frombarcode and keep barcode Excel files in Storage bucket Barcode_Info.'
             : 'Could not look up this barcode. Please try again.',
       );
     }

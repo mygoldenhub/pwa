@@ -1,13 +1,16 @@
 // supabase/functions/get_product_frombarcode/index.ts
 //
 // POST { "barcode": "9315021004205" }
-// 1) Read ARDEX Barcodes.xlsx from Storage
-// 2) Map EAN/UPC -> Material
-// 3) Load public.xero_products where code = Material
+// 1) Read barcode Excel files from Storage bucket Barcode_Info
+// 2) Map barcode -> product code:
+//      ARDEX Barcodes.xlsx: EAN/UPC -> Material
+//      ROBERTS DESIGN ...xlsx: Barcode -> SKU
+// 3) Load public.xero_products where code = Material/SKU
 //
 // Storage:
-//   bucket Barcode_Info / ARDEX Barcodes.xlsx
-// Override with secrets BARCODE_XLSX_BUCKET / BARCODE_XLSX_PATH if needed.
+//   bucket Barcode_Info /
+//     ARDEX Barcodes.xlsx
+//     ROBERTS DESIGN Tile and Stone Trade Supply 10.7.26.xlsx
 //
 // Deploy:
 //   supabase functions deploy get_product_frombarcode --project-ref psvlvrdgwtnpwwhkbqfl
@@ -24,13 +27,16 @@ const CORS_HEADERS: Record<string, string> = {
 };
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const DEFAULT_BUCKETS = ["Barcode_Info"];
-const DEFAULT_PATHS = ["ARDEX Barcodes.xlsx"];
+const DEFAULT_BUCKET = "Barcode_Info";
+const DEFAULT_PATHS = [
+  "ARDEX Barcodes.xlsx",
+  "ROBERTS DESIGN Tile and Stone Trade Supply 10.7.26.xlsx",
+];
 
-type BarcodeRow = { material: string; name: string };
+type BarcodeRow = { material: string; name: string; source: string };
 type BarcodeIndex = Map<string, BarcodeRow>;
 
-let barcodeCache: { at: number; index: BarcodeIndex; source: string } | null = null;
+let barcodeCache: { at: number; index: BarcodeIndex; sources: string[] } | null = null;
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: CORS_HEADERS });
@@ -68,11 +74,29 @@ function headerKey(raw: string): string {
 function classifyHeader(raw: string): "material" | "name" | "barcode" | null {
   const key = headerKey(raw);
   if (!key) return null;
-  if (key === "eanupc" || key === "ean" || key === "upc" || key === "barcode" || key === "eanupccode") {
+  if (
+    key === "eanupc" ||
+    key === "ean" ||
+    key === "upc" ||
+    key === "barcode" ||
+    key === "eanupccode" ||
+    key === "barcodes"
+  ) {
     return "barcode";
   }
   if (key === "materialname" || key === "name" || key === "description") return "name";
-  if (key === "material" || key === "materialnumber" || key === "materialno" || key === "materialcode") {
+  // ARDEX: Material | ROBERTS: SKU — both map to xero_products.code
+  if (
+    key === "material" ||
+    key === "materialnumber" ||
+    key === "materialno" ||
+    key === "materialcode" ||
+    key === "sku" ||
+    key === "skucode" ||
+    key === "itemcode" ||
+    key === "productcode" ||
+    key === "code"
+  ) {
     return "material";
   }
   return null;
@@ -112,7 +136,7 @@ function colLetters(ref: string): string {
   return (m?.[1] ?? "").toUpperCase();
 }
 
-function parseXlsxBarcodeIndex(bytes: Uint8Array): BarcodeIndex {
+function parseXlsxBarcodeIndex(bytes: Uint8Array, source: string): BarcodeIndex {
   const files = unzipSync(bytes);
   const decoder = new TextDecoder("utf-8");
   const read = (name: string) => {
@@ -167,6 +191,7 @@ function parseXlsxBarcodeIndex(bytes: Uint8Array): BarcodeIndex {
         if (kind) classified[col] = kind;
       }
       const kinds = new Set(Object.values(classified));
+      // Need product code (Material/SKU) + Barcode columns.
       if (kinds.has("material") && kinds.has("barcode")) {
         for (const [col, kind] of Object.entries(classified)) {
           if (kind === "material") materialCol = col;
@@ -178,52 +203,85 @@ function parseXlsxBarcodeIndex(bytes: Uint8Array): BarcodeIndex {
       }
     }
 
+    if (!headerDone) continue;
+
     const material = asText(cells[materialCol]);
     const name = asText(cells[nameCol]);
     const barcode = normalizeBarcode(cells[barcodeCol]);
     if (!material || !barcode) continue;
 
-    const row: BarcodeRow = { material, name };
+    const row: BarcodeRow = { material, name, source };
     for (const key of barcodeLookupKeys(barcode)) {
       if (!index.has(key)) index.set(key, row);
     }
   }
 
-  if (index.size === 0) throw new Error("xlsx_empty_barcode_map");
   return index;
 }
 
 async function downloadWorkbook(
   admin: SupabaseClient,
-): Promise<{ bytes: Uint8Array; source: string }> {
-  const envBucket = Deno.env.get("BARCODE_XLSX_BUCKET")?.trim();
-  const envPath = Deno.env.get("BARCODE_XLSX_PATH")?.trim();
-  const buckets = envBucket ? [envBucket, ...DEFAULT_BUCKETS.filter((b) => b !== envBucket)] : DEFAULT_BUCKETS;
-  const paths = envPath ? [envPath, ...DEFAULT_PATHS.filter((p) => p !== envPath)] : DEFAULT_PATHS;
+  bucket: string,
+  path: string,
+): Promise<Uint8Array | null> {
+  const { data, error } = await admin.storage.from(bucket).download(path);
+  if (error || !data) return null;
+  const bytes = new Uint8Array(await data.arrayBuffer());
+  return bytes.byteLength > 0 ? bytes : null;
+}
 
+function workbookPaths(): string[] {
+  const envPath = Deno.env.get("BARCODE_XLSX_PATH")?.trim();
+  const envExtra = Deno.env.get("BARCODE_XLSX_PATHS")?.trim();
+  const paths = [...DEFAULT_PATHS];
+  if (envPath && !paths.includes(envPath)) paths.unshift(envPath);
+  if (envExtra) {
+    for (const p of envExtra.split(",").map((s) => s.trim()).filter(Boolean)) {
+      if (!paths.includes(p)) paths.push(p);
+    }
+  }
+  return paths;
+}
+
+async function loadBarcodeIndex(admin: SupabaseClient): Promise<{ index: BarcodeIndex; sources: string[] }> {
+  if (barcodeCache && Date.now() - barcodeCache.at < CACHE_TTL_MS) {
+    return { index: barcodeCache.index, sources: barcodeCache.sources };
+  }
+
+  const bucket = Deno.env.get("BARCODE_XLSX_BUCKET")?.trim() || DEFAULT_BUCKET;
+  const paths = workbookPaths();
+  const merged: BarcodeIndex = new Map();
+  const sources: string[] = [];
   const tried: string[] = [];
-  for (const bucket of buckets) {
-    for (const path of paths) {
-      const source = `${bucket}/${path}`;
-      tried.push(source);
-      const { data, error } = await admin.storage.from(bucket).download(path);
-      if (error || !data) continue;
-      const bytes = new Uint8Array(await data.arrayBuffer());
-      if (bytes.byteLength > 0) return { bytes, source };
+
+  for (const path of paths) {
+    const source = `${bucket}/${path}`;
+    tried.push(source);
+    const bytes = await downloadWorkbook(admin, bucket, path);
+    if (!bytes) continue;
+
+    try {
+      const part = parseXlsxBarcodeIndex(bytes, source);
+      let added = 0;
+      for (const [key, row] of part) {
+        if (!merged.has(key)) {
+          merged.set(key, row);
+          added++;
+        }
+      }
+      if (part.size > 0) sources.push(source);
+      console.log(`Loaded ${part.size} barcode keys from ${source} (${added} new)`);
+    } catch (e) {
+      console.error(`Failed to parse ${source}:`, e);
     }
   }
 
-  throw new Error(`xlsx_not_found: tried ${tried.join(", ")}`);
-}
-
-async function loadBarcodeIndex(admin: SupabaseClient): Promise<{ index: BarcodeIndex; source: string }> {
-  if (barcodeCache && Date.now() - barcodeCache.at < CACHE_TTL_MS) {
-    return { index: barcodeCache.index, source: barcodeCache.source };
+  if (merged.size === 0) {
+    throw new Error(`xlsx_not_found: tried ${tried.join(", ")}`);
   }
-  const { bytes, source } = await downloadWorkbook(admin);
-  const index = parseXlsxBarcodeIndex(bytes);
-  barcodeCache = { at: Date.now(), index, source };
-  return { index, source };
+
+  barcodeCache = { at: Date.now(), index: merged, sources };
+  return { index: merged, sources };
 }
 
 function findMappedRow(index: BarcodeIndex, barcode: string): BarcodeRow | null {
@@ -243,6 +301,10 @@ async function findXeroProduct(admin: SupabaseClient, material: string) {
 
   const exact = await admin.from("xero_products").select(select).eq("code", code).maybeSingle();
   if (!exact.error && exact.data) return exact.data;
+
+  // Case-insensitive exact match (SKU casing can vary).
+  const ilike = await admin.from("xero_products").select(select).ilike("code", code).maybeSingle();
+  if (!ilike.error && ilike.data) return ilike.data;
 
   const noZeros = code.replace(/^0+/, "");
   if (noZeros && noZeros !== code) {
@@ -297,14 +359,15 @@ Deno.serve(async (req) => {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    const { index, source } = await loadBarcodeIndex(admin);
+    const { index, sources } = await loadBarcodeIndex(admin);
     const mapped = findMappedRow(index, barcode);
     if (!mapped) {
       return json({
         ok: false,
         error: "barcode_not_mapped",
         barcode,
-        message: "This barcode is not in the ARDEX barcode file.",
+        sources,
+        message: "This barcode was not found in ARDEX or ROBERTS barcode files.",
       });
     }
 
@@ -316,8 +379,9 @@ Deno.serve(async (req) => {
         barcode,
         material: mapped.material,
         materialName: mapped.name,
-        source,
-        message: `Material ${mapped.material} was found in the barcode file, but no matching Xero product code exists.`,
+        source: mapped.source,
+        sources,
+        message: `Code ${mapped.material} was found in the barcode file, but no matching Xero product code exists.`,
       });
     }
 
@@ -326,7 +390,8 @@ Deno.serve(async (req) => {
       barcode,
       material: mapped.material,
       materialName: mapped.name,
-      source,
+      source: mapped.source,
+      sources,
       product,
     });
   } catch (e) {
