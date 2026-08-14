@@ -321,3 +321,34 @@ bool webPreviewIsMirrored() {
 }
 
 bool webIsAppleMobile() => _isAppleMobileWeb();
+
+/// Stop live camera tracks and detach them from <video> elements.
+/// Needed because mobile_scanner on web often leaves getUserMedia running,
+/// which blocks the next visit from opening the camera.
+Future<void> releaseWebCameraTracks() async {
+  try {
+    for (final track in _liveVideoTracks()) {
+      try {
+        track.callMethod('stop'.toJS);
+      } catch (_) {}
+    }
+
+    final videos = _document.callMethod('querySelectorAll'.toJS, 'video'.toJS);
+    if (videos == null) return;
+    final list = videos as JSObject;
+    final length = _jsLength(list);
+    for (var i = 0; i < length; i++) {
+      final video = list.callMethod('item'.toJS, i.toJS);
+      if (video == null) continue;
+      final jsVideo = video as JSObject;
+      try {
+        jsVideo.callMethod('pause'.toJS);
+      } catch (_) {}
+      try {
+        jsVideo.setProperty('srcObject'.toJS, null);
+      } catch (_) {}
+    }
+  } catch (_) {
+    // Best-effort cleanup — never block leaving the scan page.
+  }
+}

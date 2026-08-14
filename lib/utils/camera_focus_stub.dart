@@ -23,3 +23,5 @@ bool webIsAppleMobile() => false;
 WebCameraCapabilities probeWebCameraCapabilities() {
   return const WebCameraCapabilities.unsupported();
 }
+
+Future<void> releaseWebCameraTracks() async {}

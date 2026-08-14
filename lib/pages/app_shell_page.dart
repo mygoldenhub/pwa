@@ -10,15 +10,7 @@ class AppShellPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
-      body: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 220),
-        switchInCurve: Curves.easeOutCubic,
-        switchOutCurve: Curves.easeInCubic,
-        child: KeyedSubtree(
-          key: ValueKey(navigationShell.currentIndex),
-          child: navigationShell,
-        ),
-      ),
+      body: navigationShell,
       bottomNavigationBar: NavigationBar(
         height: 72,
         backgroundColor: cs.surface,

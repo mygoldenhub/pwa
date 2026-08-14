@@ -129,7 +129,10 @@ class AppRouter {
                   routes: [
                     GoRoute(
                       path: 'scan',
-                      pageBuilder: (context, state) => const MaterialPage(child: BarcodeScannerPage()),
+                      pageBuilder: (context, state) => MaterialPage(
+                        key: state.pageKey,
+                        child: const BarcodeScannerPage(),
+                      ),
                     ),
                     GoRoute(
                       path: 'barcode/:barcode',

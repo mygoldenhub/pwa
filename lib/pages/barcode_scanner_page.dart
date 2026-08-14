@@ -18,9 +18,9 @@ class BarcodeScannerPage extends StatefulWidget {
   State<BarcodeScannerPage> createState() => _BarcodeScannerPageState();
 }
 
-class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
+class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBindingObserver {
   late final MobileScannerController _controller = MobileScannerController(
-    autoStart: true,
+    autoStart: false,
     facing: CameraFacing.back,
     detectionSpeed: DetectionSpeed.unrestricted,
     // Empty = all formats. Restricting formats can miss EAN-13 on some backends.
@@ -30,7 +30,12 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
 
   final WebBarcodePoller _webPoller = WebBarcodePoller();
 
+  /// Serializes camera stop/start across page instances. The web plugin is a
+  /// singleton — overlapping stop+start is why the camera only worked once.
+  static Future<void> _cameraSession = Future<void>.value();
+
   bool _didReturn = false;
+  Future<void>? _shutdownFuture;
   MobileScannerException? _lastError;
   bool _webControlsProbed = false;
   WebCameraCapabilities _webCaps = const WebCameraCapabilities.unsupported();
@@ -107,6 +112,26 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
       MobileScannerPlatform.instance.setWebBarcodeReader(WebBarcodeReader.auto);
     }
     _controller.addListener(_onControllerUpdate);
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_ensureCameraStarted());
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_didReturn) return;
+    switch (state) {
+      case AppLifecycleState.resumed:
+        unawaited(_ensureCameraStarted());
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+        // Don't stop on `inactive` — the camera permission dialog uses it on web
+        // and would kill the first successful start.
+        unawaited(_controller.stop());
+      default:
+        break;
+    }
   }
 
   void _onControllerUpdate() {
@@ -163,6 +188,56 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
     }
   }
 
+  Future<void> _ensureCameraStarted() async {
+    await _cameraSession;
+    if (!mounted || _didReturn) return;
+    if (_controller.value.isRunning || _controller.value.isStarting) return;
+
+    Future<void> start() async {
+      await _controller.start();
+    }
+
+    try {
+      await releaseWebCameraTracks();
+      if (!mounted || _didReturn) return;
+      await start();
+    } catch (e) {
+      debugPrint('Camera start failed, retrying after release: $e');
+      try {
+        await _controller.stop();
+      } catch (_) {}
+      await releaseWebCameraTracks();
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      if (!mounted || _didReturn) return;
+      try {
+        await start();
+      } catch (e2) {
+        debugPrint('Camera start retry failed: $e2');
+        if (!mounted) return;
+        setState(() {
+          _lastError = e2 is MobileScannerException ? e2 : null;
+        });
+      }
+    }
+  }
+
+  Future<void> _shutdownCamera() {
+    return _shutdownFuture ??= () async {
+      _webPoller.stop();
+      if (kIsWeb && _torchOn) {
+        try {
+          await setWebTorch(false);
+        } catch (_) {}
+      }
+      try {
+        await _controller.stop();
+      } catch (e) {
+        debugPrint('Failed to stop scanner: $e');
+      }
+      await releaseWebCameraTracks();
+    }();
+  }
+
   Future<void> _restartScanner() async {
     if (!mounted) return;
     setState(() {
@@ -171,58 +246,47 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
       _webCaps = const WebCameraCapabilities.unsupported();
       _torchOn = false;
     });
-    try {
-      await _controller.stop();
-    } catch (e) {
-      debugPrint('Failed to stop scanner before retry: $e');
-    }
-    try {
-      await _controller.start();
-      if (kIsWeb) {
-        await _probeWebControls();
-        _webControlsProbed = true;
-      }
-    } catch (e) {
-      debugPrint('Failed to restart scanner: $e');
-      if (!mounted) return;
-      setState(() {
-        _lastError = e is MobileScannerException ? e : null;
-      });
+    _shutdownFuture = null;
+    _cameraSession = _shutdownCamera();
+    await _cameraSession;
+    _shutdownFuture = null;
+    _didReturn = false;
+    await _ensureCameraStarted();
+    if (kIsWeb && mounted) {
+      _webControlsProbed = false;
+      await _probeWebControls();
+      _webControlsProbed = true;
     }
   }
 
-  void _goToCart() {
-    if (!mounted) return;
-    _didReturn = true;
-    _returnTimer?.cancel();
-    if (kIsWeb && _torchOn) unawaited(setWebTorch(false));
-    _webPoller.stop();
-    try {
-      _controller.stop();
-    } catch (e) {
-      debugPrint('Failed to stop scanner before leaving: $e');
-    }
-    if (context.canPop()) {
-      context.pop<String?>();
-    } else {
-      context.go(AppRoutes.cart);
-    }
-  }
-
-  void _openBarcodeResult(String value) {
+  Future<void> _leaveScanner({required VoidCallback afterStop}) async {
     if (_didReturn) return;
     _didReturn = true;
     _returnTimer?.cancel();
     _liveClearTimer?.cancel();
-    if (kIsWeb && _torchOn) unawaited(setWebTorch(false));
-    _webPoller.stop();
-    HapticFeedback.mediumImpact();
-    try {
-      _controller.stop();
-    } catch (e) {
-      debugPrint('Failed to stop scanner before result page: $e');
-    }
-    context.go(AppRoutes.barcodeResult(value));
+    _cameraSession = _shutdownCamera();
+    await _cameraSession;
+    if (!mounted) return;
+    afterStop();
+  }
+
+  void _goToCart() {
+    unawaited(_leaveScanner(afterStop: () {
+      if (!mounted) return;
+      if (context.canPop()) {
+        context.pop<String?>();
+      } else {
+        context.go(AppRoutes.cart);
+      }
+    }));
+  }
+
+  void _openBarcodeResult(String value) {
+    unawaited(_leaveScanner(afterStop: () {
+      if (!mounted) return;
+      HapticFeedback.mediumImpact();
+      context.go(AppRoutes.barcodeResult(value));
+    }));
   }
 
   Rect? _mapBarcodeToPreview(Barcode barcode, Size captureSize) {
@@ -432,12 +496,13 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
 
   @override
   void dispose() {
-    if (kIsWeb && _torchOn) unawaited(setWebTorch(false));
+    WidgetsBinding.instance.removeObserver(this);
     _liveClearTimer?.cancel();
     _returnTimer?.cancel();
-    _webPoller.stop();
     _controller.removeListener(_onControllerUpdate);
-    _controller.dispose();
+    _cameraSession = _shutdownCamera().whenComplete(() {
+      _controller.dispose();
+    });
     super.dispose();
   }
 
@@ -487,6 +552,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
                   controller: _controller,
                   fit: BoxFit.cover,
                   tapToFocus: false,
+                  useAppLifecycleState: false,
                   scanWindow: guideRect,
                   onDetect: _onDetect,
                   errorBuilder: (context, error) {

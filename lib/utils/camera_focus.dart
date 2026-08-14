@@ -31,3 +31,6 @@ bool webIsAppleMobile() => impl.webIsAppleMobile();
 
 WebCameraCapabilities probeWebCameraCapabilities() =>
     impl.probeWebCameraCapabilities();
+
+/// Stop leftover getUserMedia tracks so the camera can start again.
+Future<void> releaseWebCameraTracks() => impl.releaseWebCameraTracks();
