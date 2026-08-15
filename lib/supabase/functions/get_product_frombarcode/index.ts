@@ -5,12 +5,14 @@
 // 2) Map barcode -> product code:
 //      ARDEX Barcodes.xlsx: EAN/UPC -> Material
 //      ROBERTS DESIGN ...xlsx: Barcode -> SKU
-// 3) Load public.xero_products where code = Material/SKU
+//      DTA ...xlsx: BARCODE -> ITEM CODE
+// 3) Load public.xero_products where code = Material/SKU/ITEM CODE
 //
 // Storage:
 //   bucket Barcode_Info /
 //     ARDEX Barcodes.xlsx
 //     ROBERTS DESIGN Tile and Stone Trade Supply 10.7.26.xlsx
+//     DTA 20260611 2TILBYR1 Pricelist May 2026.xlsx
 //
 // Deploy:
 //   supabase functions deploy get_product_frombarcode --project-ref psvlvrdgwtnpwwhkbqfl
@@ -31,6 +33,7 @@ const DEFAULT_BUCKET = "Barcode_Info";
 const DEFAULT_PATHS = [
   "ARDEX Barcodes.xlsx",
   "ROBERTS DESIGN Tile and Stone Trade Supply 10.7.26.xlsx",
+  "DTA 20260611 2TILBYR1 Pricelist May 2026.xlsx",
 ];
 
 type BarcodeRow = { material: string; name: string; source: string };
@@ -85,7 +88,7 @@ function classifyHeader(raw: string): "material" | "name" | "barcode" | null {
     return "barcode";
   }
   if (key === "materialname" || key === "name" || key === "description") return "name";
-  // ARDEX: Material | ROBERTS: SKU — both map to xero_products.code
+  // ARDEX: Material | ROBERTS: SKU | DTA: ITEM CODE — all map to xero_products.code
   if (
     key === "material" ||
     key === "materialnumber" ||
@@ -94,6 +97,7 @@ function classifyHeader(raw: string): "material" | "name" | "barcode" | null {
     key === "sku" ||
     key === "skucode" ||
     key === "itemcode" ||
+    key === "item" ||
     key === "productcode" ||
     key === "code"
   ) {
@@ -159,11 +163,13 @@ function parseXlsxBarcodeIndex(bytes: Uint8Array, source: string): BarcodeIndex 
 
   for (const rowXml of rows) {
     const cells: Record<string, string> = {};
-    const cellRe = /<c\b([^>]*)>([\s\S]*?)<\/c>/gi;
+    // Support both normal <c>...</c> and empty self-closing <c .../>.
+    // Self-closing cells (common in DTA header row) must not swallow the next cell.
+    const cellRe = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/gi;
     let cellMatch: RegExpExecArray | null;
     while ((cellMatch = cellRe.exec(rowXml))) {
       const attrs = cellMatch[1];
-      const body = cellMatch[2];
+      const body = cellMatch[2] ?? "";
       const ref = (attrs.match(/\br="([^"]+)"/) ?? [])[1] ?? "";
       const type = (attrs.match(/\bt="([^"]+)"/) ?? [])[1] ?? "";
       const vMatch = body.match(/<v\b[^>]*>([\s\S]*?)<\/v>/i);
@@ -178,7 +184,10 @@ function parseXlsxBarcodeIndex(bytes: Uint8Array, source: string): BarcodeIndex 
           const i = Number(raw);
           value = Number.isFinite(i) ? (shared[i] ?? raw) : raw;
         } else {
-          value = raw;
+          // Numeric Excel cells (most DTA barcodes) — keep as digit string.
+          value = raw.includes("e") || raw.includes("E")
+            ? String(Math.round(Number(raw)))
+            : raw;
         }
       }
       if (ref) cells[colLetters(ref)] = value.trim();
@@ -367,7 +376,7 @@ Deno.serve(async (req) => {
         error: "barcode_not_mapped",
         barcode,
         sources,
-        message: "This barcode was not found in ARDEX or ROBERTS barcode files.",
+        message: "This barcode was not found in ARDEX, ROBERTS, or DTA barcode files.",
       });
     }
 
