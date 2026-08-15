@@ -5,12 +5,16 @@
 // 2) Map barcode -> product code:
 //      ARDEX Barcodes.xlsx: EAN/UPC -> Material
 //      ROBERTS DESIGN ...xlsx: Barcode -> SKU
-// 3) Load public.xero_products where code = Material/SKU
+//      DTA ...xlsx: BARCODE -> ITEM CODE
+//      SOLA Measuring_Pricelist ...xlsx: Barcode -> Part Number (all sheets)
+// 3) Load public.xero_products where code = Material/SKU/ITEM CODE/Part Number
 //
 // Storage:
 //   bucket Barcode_Info /
 //     ARDEX Barcodes.xlsx
 //     ROBERTS DESIGN Tile and Stone Trade Supply 10.7.26.xlsx
+//     DTA 20260611 2TILBYR1 Pricelist May 2026.xlsx
+//     SOLA Measuring_Pricelist 1 FEB 2026 V1_Gold.xlsx
 //
 // Deploy:
 //   supabase functions deploy get_product_frombarcode --project-ref psvlvrdgwtnpwwhkbqfl
@@ -31,6 +35,8 @@ const DEFAULT_BUCKET = "Barcode_Info";
 const DEFAULT_PATHS = [
   "ARDEX Barcodes.xlsx",
   "ROBERTS DESIGN Tile and Stone Trade Supply 10.7.26.xlsx",
+  "DTA 20260611 2TILBYR1 Pricelist May 2026.xlsx",
+  "SOLA Measuring_Pricelist 1 FEB 2026 V1_Gold.xlsx",
 ];
 
 type BarcodeRow = { material: string; name: string; source: string };
@@ -85,7 +91,7 @@ function classifyHeader(raw: string): "material" | "name" | "barcode" | null {
     return "barcode";
   }
   if (key === "materialname" || key === "name" || key === "description") return "name";
-  // ARDEX: Material | ROBERTS: SKU — both map to xero_products.code
+  // ARDEX: Material | ROBERTS: SKU | DTA: ITEM CODE | SOLA: Part Number
   if (
     key === "material" ||
     key === "materialnumber" ||
@@ -94,8 +100,12 @@ function classifyHeader(raw: string): "material" | "name" | "barcode" | null {
     key === "sku" ||
     key === "skucode" ||
     key === "itemcode" ||
+    key === "item" ||
     key === "productcode" ||
-    key === "code"
+    key === "code" ||
+    key === "partnumber" ||
+    key === "partno" ||
+    key === "part"
   ) {
     return "material";
   }
@@ -136,34 +146,27 @@ function colLetters(ref: string): string {
   return (m?.[1] ?? "").toUpperCase();
 }
 
-function parseXlsxBarcodeIndex(bytes: Uint8Array, source: string): BarcodeIndex {
-  const files = unzipSync(bytes);
-  const decoder = new TextDecoder("utf-8");
-  const read = (name: string) => {
-    const file = files[name];
-    if (!file) return "";
-    return decoder.decode(file);
-  };
-
-  const shared = parseSharedStrings(read("xl/sharedStrings.xml"));
-  const sheetName = Object.keys(files).find((k) => k.startsWith("xl/worksheets/sheet") && k.endsWith(".xml"));
-  const sheetXml = sheetName ? decoder.decode(files[sheetName]) : "";
-  if (!sheetXml) throw new Error("xlsx_missing_sheet");
-
+function parseSheetRows(
+  sheetXml: string,
+  shared: string[],
+  source: string,
+  index: BarcodeIndex,
+): number {
   const rows = sheetXml.match(/<row\b[^>]*>[\s\S]*?<\/row>/gi) ?? [];
-  const index: BarcodeIndex = new Map();
   let materialCol = "A";
   let nameCol = "B";
   let barcodeCol = "C";
   let headerDone = false;
+  let added = 0;
 
   for (const rowXml of rows) {
     const cells: Record<string, string> = {};
-    const cellRe = /<c\b([^>]*)>([\s\S]*?)<\/c>/gi;
+    // Support both normal <c>...</c> and empty self-closing <c .../>.
+    const cellRe = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/gi;
     let cellMatch: RegExpExecArray | null;
     while ((cellMatch = cellRe.exec(rowXml))) {
       const attrs = cellMatch[1];
-      const body = cellMatch[2];
+      const body = cellMatch[2] ?? "";
       const ref = (attrs.match(/\br="([^"]+)"/) ?? [])[1] ?? "";
       const type = (attrs.match(/\bt="([^"]+)"/) ?? [])[1] ?? "";
       const vMatch = body.match(/<v\b[^>]*>([\s\S]*?)<\/v>/i);
@@ -178,29 +181,29 @@ function parseXlsxBarcodeIndex(bytes: Uint8Array, source: string): BarcodeIndex 
           const i = Number(raw);
           value = Number.isFinite(i) ? (shared[i] ?? raw) : raw;
         } else {
-          value = raw;
+          value = raw.includes("e") || raw.includes("E")
+            ? String(Math.round(Number(raw)))
+            : raw;
         }
       }
       if (ref) cells[colLetters(ref)] = value.trim();
     }
 
-    if (!headerDone) {
-      const classified: Record<string, "material" | "name" | "barcode"> = {};
-      for (const [col, val] of Object.entries(cells)) {
-        const kind = classifyHeader(val);
-        if (kind) classified[col] = kind;
+    // Detect / re-detect header rows (SOLA repeats headers per section).
+    const classified: Record<string, "material" | "name" | "barcode"> = {};
+    for (const [col, val] of Object.entries(cells)) {
+      const kind = classifyHeader(val);
+      if (kind) classified[col] = kind;
+    }
+    const kinds = new Set(Object.values(classified));
+    if (kinds.has("material") && kinds.has("barcode")) {
+      for (const [col, kind] of Object.entries(classified)) {
+        if (kind === "material") materialCol = col;
+        if (kind === "name") nameCol = col;
+        if (kind === "barcode") barcodeCol = col;
       }
-      const kinds = new Set(Object.values(classified));
-      // Need product code (Material/SKU) + Barcode columns.
-      if (kinds.has("material") && kinds.has("barcode")) {
-        for (const [col, kind] of Object.entries(classified)) {
-          if (kind === "material") materialCol = col;
-          if (kind === "name") nameCol = col;
-          if (kind === "barcode") barcodeCol = col;
-        }
-        headerDone = true;
-        continue;
-      }
+      headerDone = true;
+      continue;
     }
 
     if (!headerDone) continue;
@@ -209,11 +212,44 @@ function parseXlsxBarcodeIndex(bytes: Uint8Array, source: string): BarcodeIndex 
     const name = asText(cells[nameCol]);
     const barcode = normalizeBarcode(cells[barcodeCol]);
     if (!material || !barcode) continue;
+    // Skip category/title rows that look like codes but aren't.
+    if (classifyHeader(material) != null) continue;
 
     const row: BarcodeRow = { material, name, source };
     for (const key of barcodeLookupKeys(barcode)) {
-      if (!index.has(key)) index.set(key, row);
+      if (!index.has(key)) {
+        index.set(key, row);
+        added++;
+      }
     }
+  }
+
+  return added;
+}
+
+function parseXlsxBarcodeIndex(bytes: Uint8Array, source: string): BarcodeIndex {
+  const files = unzipSync(bytes);
+  const decoder = new TextDecoder("utf-8");
+  const read = (name: string) => {
+    const file = files[name];
+    if (!file) return "";
+    return decoder.decode(file);
+  };
+
+  const shared = parseSharedStrings(read("xl/sharedStrings.xml"));
+  // Parse every worksheet (SOLA has 3 product tabs; sheet1 may be Discounts).
+  const sheetNames = Object.keys(files)
+    .filter((k) => k.startsWith("xl/worksheets/sheet") && k.endsWith(".xml"))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+  if (sheetNames.length === 0) throw new Error("xlsx_missing_sheet");
+
+  const index: BarcodeIndex = new Map();
+  for (const sheetName of sheetNames) {
+    const sheetXml = decoder.decode(files[sheetName]);
+    const before = index.size;
+    parseSheetRows(sheetXml, shared, `${source}#${sheetName}`, index);
+    console.log(`  sheet ${sheetName}: +${index.size - before} barcode keys`);
   }
 
   return index;
@@ -367,7 +403,7 @@ Deno.serve(async (req) => {
         error: "barcode_not_mapped",
         barcode,
         sources,
-        message: "This barcode was not found in ARDEX or ROBERTS barcode files.",
+        message: "This barcode was not found in ARDEX, ROBERTS, or DTA barcode files.",
       });
     }
 
