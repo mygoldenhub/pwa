@@ -57,20 +57,58 @@ function digitsOnly(raw: string): string {
   return raw.replace(/\D/g, "");
 }
 
-function normalizeBarcode(raw: unknown): string | null {
+/** GTIN-14 ↔ EAN-13 ↔ UPC-A lookup variants. */
+function gtinLookupVariants(digits: string): string[] {
+  const d = digitsOnly(digits);
+  if (!d) return [];
+  const keys = new Set<string>([d]);
+  if (d.length === 14 && d.startsWith("0")) keys.add(d.slice(1));
+  if (d.length === 13) keys.add(`0${d}`);
+  if (d.length === 12) keys.add(`0${d}`);
+  return [...keys];
+}
+
+/** Extract GTIN from GS1 labels like (01)09315021121551(30)0020 or element strings. */
+function extractGtinFromScan(raw: unknown): string[] {
   const text = asText(raw);
-  if (!text) return null;
+  if (!text) return [];
+
+  const candidates = new Set<string>();
+
+  for (const m of text.matchAll(/\(\s*01\s*\)\s*([0-9]{13,14})/gi)) {
+    const g = digitsOnly(m[1] ?? "");
+    if (g.length >= 13) {
+      candidates.add(g.length === 14 ? g : g.padStart(14, "0"));
+    }
+  }
+
   const digits = digitsOnly(text);
-  return digits.length >= 8 ? digits : text.replace(/\s+/g, "");
+  if (digits) {
+    if (digits.startsWith("01") && digits.length >= 16) {
+      candidates.add(digits.slice(2, 16));
+    }
+    candidates.add(digits);
+  }
+
+  const keys = new Set<string>();
+  for (const c of candidates) {
+    for (const k of gtinLookupVariants(c)) keys.add(k);
+  }
+  return [...keys];
+}
+
+function normalizeBarcode(raw: unknown): string | null {
+  const keys = extractGtinFromScan(raw);
+  if (keys.length === 0) return null;
+  const gtin14 = keys.find((k) => k.length === 14);
+  if (gtin14) return gtin14;
+  const gtin13 = keys.find((k) => k.length === 13);
+  if (gtin13) return gtin13;
+  return keys[0];
 }
 
 function barcodeLookupKeys(barcode: string): string[] {
-  const keys = new Set<string>([barcode]);
-  const digits = digitsOnly(barcode);
-  if (digits) keys.add(digits);
-  if (digits.length === 12) keys.add(`0${digits}`);
-  if (digits.length === 13 && digits.startsWith("0")) keys.add(digits.slice(1));
-  return [...keys];
+  return extractGtinFromScan(barcode);
 }
 
 function headerKey(raw: string): string {
@@ -321,7 +359,7 @@ async function loadBarcodeIndex(admin: SupabaseClient): Promise<{ index: Barcode
 }
 
 function findMappedRow(index: BarcodeIndex, barcode: string): BarcodeRow | null {
-  for (const key of barcodeLookupKeys(barcode)) {
+  for (const key of extractGtinFromScan(barcode)) {
     const row = index.get(key);
     if (row) return row;
   }
@@ -382,7 +420,8 @@ Deno.serve(async (req) => {
     }
 
     const url = new URL(req.url);
-    const barcode = normalizeBarcode(payload.barcode ?? payload.code ?? url.searchParams.get("barcode"));
+    const rawBarcode = payload.barcode ?? payload.code ?? url.searchParams.get("barcode");
+    const barcode = normalizeBarcode(rawBarcode);
     if (!barcode) {
       return json({
         ok: false,
@@ -403,7 +442,7 @@ Deno.serve(async (req) => {
         error: "barcode_not_mapped",
         barcode,
         sources,
-        message: "This barcode was not found in ARDEX, ROBERTS, or DTA barcode files.",
+        message: "This barcode was not found in supplier barcode files (ARDEX, ROBERTS, DTA, SOLA).",
       });
     }
 

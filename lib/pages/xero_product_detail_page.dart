@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/components/app_header.dart';
 import 'package:pwa/components/quantity_input.dart';
+import 'package:pwa/components/xero_product_name_picker.dart';
+import 'package:pwa/nav.dart';
 import 'package:pwa/models/xero_product.dart';
 import 'package:pwa/services/barcode_product_service.dart';
 import 'package:pwa/services/cart_service.dart';
@@ -90,6 +92,12 @@ class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
     }
   }
 
+  Future<void> _openManualLookup() async {
+    final selected = await showXeroProductNamePicker(context);
+    if (!mounted || selected == null) return;
+    context.go(AppRoutes.xeroProduct(selected.xeroItemId));
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -120,6 +128,7 @@ class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
                     ? null
                     : (result?.message ?? 'This item may have been removed from Xero or not synced yet.'),
                 fromBarcode: _fromBarcode,
+                onLookUpProduct: _openManualLookup,
                 onScanAgain: () => context.go('/app/cart/scan'),
                 onClose: _close,
               );
@@ -339,6 +348,7 @@ class _LookupEmpty extends StatelessWidget {
   final String? barcode;
   final String? message;
   final bool fromBarcode;
+  final VoidCallback onLookUpProduct;
   final VoidCallback onScanAgain;
   final VoidCallback onClose;
 
@@ -346,6 +356,7 @@ class _LookupEmpty extends StatelessWidget {
     required this.barcode,
     required this.message,
     required this.fromBarcode,
+    required this.onLookUpProduct,
     required this.onScanAgain,
     required this.onClose,
   });
@@ -353,45 +364,93 @@ class _LookupEmpty extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final titleStyle = Theme.of(context).textTheme.titleLarge?.semiBold.copyWith(fontSize: 26);
+    final barcodeStyle = Theme.of(context).textTheme.titleLarge?.copyWith(
+          fontWeight: FontWeight.w700,
+          fontSize: 24,
+          letterSpacing: 1.1,
+        );
+    final messageStyle = Theme.of(context).textTheme.titleMedium?.withColor(cs.onSurfaceVariant);
+    final linkStyle = Theme.of(context).textTheme.titleMedium?.semiBold;
+
     return Center(
       child: Padding(
         padding: AppSpacing.paddingLg,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.search_off, color: cs.onSurfaceVariant, size: 40),
-            const SizedBox(height: AppSpacing.sm),
-            Text('Product not found', style: Theme.of(context).textTheme.titleLarge?.semiBold),
-            if ((barcode ?? '').isNotEmpty) ...[
-              const SizedBox(height: AppSpacing.sm),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 320),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.search_off, color: cs.onSurfaceVariant, size: 52),
+              const SizedBox(height: AppSpacing.md),
               Text(
-                barcode!,
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.8,
-                    ),
+                'Product not found',
+                style: titleStyle,
                 textAlign: TextAlign.center,
               ),
-            ],
-            if ((message ?? '').isNotEmpty) ...[
-              const SizedBox(height: AppSpacing.sm),
-              Text(
-                message!,
-                style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
-                textAlign: TextAlign.center,
-              ),
-            ],
-            if (fromBarcode) ...[
+              if ((barcode ?? '').isNotEmpty) ...[
+                const SizedBox(height: AppSpacing.md),
+                Text(
+                  barcode!,
+                  style: barcodeStyle,
+                  textAlign: TextAlign.center,
+                ),
+              ],
+              if ((message ?? '').isNotEmpty) ...[
+                const SizedBox(height: AppSpacing.sm),
+                Text(
+                  message!,
+                  style: messageStyle,
+                  textAlign: TextAlign.center,
+                ),
+              ],
               const SizedBox(height: AppSpacing.xl),
-              FilledButton.icon(
-                onPressed: onScanAgain,
-                icon: Icon(Icons.qr_code_scanner, color: cs.onPrimary),
-                label: Text('Scan again', style: TextStyle(color: cs.onPrimary)),
+              if (fromBarcode) ...[
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: cs.primary,
+                      foregroundColor: cs.onPrimary,
+                    ),
+                    onPressed: onScanAgain,
+                    icon: Icon(Icons.qr_code_scanner, color: cs.onPrimary),
+                    label: Text(
+                      'Scan again',
+                      style: Theme.of(context).textTheme.titleMedium?.semiBold.withColor(cs.onPrimary),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+              ],
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: cs.primary,
+                    side: BorderSide(color: cs.primary.withValues(alpha: 0.45)),
+                  ),
+                  onPressed: onLookUpProduct,
+                  icon: Icon(Icons.search, color: cs.primary),
+                  label: Text(
+                    'Look up product',
+                    style: Theme.of(context).textTheme.titleMedium?.semiBold.withColor(cs.primary),
+                  ),
+                ),
               ),
-              const SizedBox(height: AppSpacing.sm),
-              TextButton(onPressed: onClose, child: const Text('Back to cart')),
+              const SizedBox(height: AppSpacing.md),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: TextButton(
+                  onPressed: onClose,
+                  child: Text('Back to cart', style: linkStyle),
+                ),
+              ),
             ],
-          ],
+          ),
         ),
       ),
     );
