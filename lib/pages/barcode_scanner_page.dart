@@ -8,6 +8,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:pwa/components/app_header.dart';
 import 'package:pwa/nav.dart';
 import 'package:pwa/theme.dart';
+import 'package:pwa/utils/barcode_normalize.dart';
 import 'package:pwa/utils/camera_focus.dart';
 import 'package:pwa/utils/web_barcode_poller.dart';
 
@@ -333,10 +334,10 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
 
   void _handleDecodedValue(String raw, {Rect? mapped}) {
     if (_didReturn) return;
-    final value = raw.trim();
+    final value = BarcodeNormalize.primary(raw) ?? raw.trim();
     if (value.isEmpty) return;
 
-    debugPrint('Barcode accepted in frame: $value');
+    debugPrint('Barcode accepted in frame: $raw -> $value');
 
     setState(() {
       _liveBarcodeValue = value;

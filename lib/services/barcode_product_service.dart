@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:pwa/utils/barcode_normalize.dart';
 import 'package:pwa/models/xero_product.dart';
 import 'package:pwa/supabase/supabase_config.dart';
 
@@ -26,7 +27,8 @@ class BarcodeProductService {
   static const String functionName = 'get_product_frombarcode';
 
   static Future<BarcodeProductLookup> lookup(String barcode) async {
-    final code = barcode.trim();
+    final normalized = BarcodeNormalize.primary(barcode) ?? barcode.trim();
+    final code = normalized.trim();
     if (code.isEmpty) {
       return const BarcodeProductLookup(
         ok: false,
