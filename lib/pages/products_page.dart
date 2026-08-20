@@ -520,14 +520,14 @@ class _ProductsPageState extends State<ProductsPage> {
       }
 
       // Navigate to a success page (after webhook success + cart clear).
-      final createdInvoiceId = result.invoiceId?.trim() ?? '';
+      final createdInvoiceId = result.body;
       debugPrint('--------createdInvoiceId--------');
-      debugPrint('id=$createdInvoiceId discount=${result.discountPercent} body=${result.body}');
+      debugPrint('$createdInvoiceId');
       debugPrint('--------createdInvoiceId--------');
-      if (createdInvoiceId.isEmpty) {
+      if (createdInvoiceId == null || createdInvoiceId.toString().trim().isEmpty) {
         throw Exception('Invoice was created, but no invoice id was returned from the webhook.');
       }
-      context.go(AppRoutes.invoiceSuccess(createdInvoiceId, discount: result.discountPercent));
+      context.go(AppRoutes.invoiceSuccess(createdInvoiceId));
     } catch (e) {
       if (!mounted) return;
       context.pop(); // close loading

@@ -27,12 +27,10 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
   bool _postingInvoice = false;
   bool _postedInvoice = false;
   String? _createdInvoiceId;
-  double? _createdDiscountPercent;
 
   bool _postingPayment = false;
   bool _postedPayment = false;
   String? _paidInvoiceId;
-  double? _paidDiscountPercent;
 
   @override
   void initState() {
@@ -89,8 +87,8 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
     setState(() => _postingInvoice = true);
     try {
       final res = await InvoiceWebhookService.submitInvoicePayload(payload, markPaid: true);
-      final createdInvoiceId = res.invoiceId?.trim() ?? '';
-      if (createdInvoiceId.isEmpty) {
+      final createdInvoiceId = res.body;
+      if (createdInvoiceId == null || createdInvoiceId.toString().trim().isEmpty) {
         throw Exception('Invoice webhook succeeded, but no invoice id was returned.');
       }
 
@@ -104,8 +102,7 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
 
       await PendingInvoiceStorage.clear();
       _postedInvoice = true;
-      _createdInvoiceId = createdInvoiceId;
-      _createdDiscountPercent = res.discountPercent;
+      _createdInvoiceId = createdInvoiceId.toString().trim();
       if (!mounted) return;
       setState(() {});
     } catch (e) {
@@ -129,13 +126,10 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
 
     setState(() => _postingPayment = true);
     try {
-      final res = await InvoiceWebhookService.submitInvoicePayload(payload, markPaid: true);
-      final fromPayload =
-          (payload['invoice_id'] ?? payload['invoiceId'] ?? payload['invoiceID'])?.toString().trim();
-      final invoiceId = (res.invoiceId?.trim().isNotEmpty ?? false) ? res.invoiceId!.trim() : fromPayload;
+      await InvoiceWebhookService.submitInvoicePayload(payload, markPaid: true);
+      final invoiceId = (payload['invoice_id'] ?? payload['invoiceId'] ?? payload['invoiceID'])?.toString().trim();
       _postedPayment = true;
       _paidInvoiceId = (invoiceId == null || invoiceId.isEmpty) ? null : invoiceId;
-      _paidDiscountPercent = res.discountPercent;
 
       await PendingInvoicePaymentStorage.clear();
 
@@ -173,12 +167,7 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
       setState(() => _error = _error ?? 'Invoice is not ready yet. Please wait a moment and try again.');
       return;
     }
-    context.go(
-      AppRoutes.invoiceSuccess(
-        id,
-        discount: _paidDiscountPercent ?? _createdDiscountPercent,
-      ),
-    );
+    context.go(AppRoutes.invoiceSuccess(id));
   }
 
   @override

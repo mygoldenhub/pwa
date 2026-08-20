@@ -7,12 +7,10 @@ import 'package:pwa/theme.dart';
 
 class InvoiceSuccessPage extends StatefulWidget {
   final String invoiceId;
-  final double? discountPercent;
 
   const InvoiceSuccessPage({
     super.key,
     required this.invoiceId,
-    this.discountPercent,
   });
 
   @override
@@ -21,30 +19,14 @@ class InvoiceSuccessPage extends StatefulWidget {
 
 class _InvoiceSuccessPageState extends State<InvoiceSuccessPage> {
   late final Future<XeroInvoice?> _invoiceFuture;
-  late final String _resolvedInvoiceId;
-  late final double? _resolvedDiscountPercent;
-
-  static final RegExp _uuidPattern = RegExp(
-    r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}',
-  );
-  static final RegExp _discountInText = RegExp(
-    r'discount["\s:=]+["\s]*([0-9]+(?:\.[0-9]+)?)',
-    caseSensitive: false,
-  );
 
   @override
   void initState() {
     super.initState();
-    final raw = widget.invoiceId.trim();
-    _resolvedInvoiceId = _uuidPattern.firstMatch(raw)?.group(0) ?? raw;
-    _resolvedDiscountPercent = widget.discountPercent ??
-        double.tryParse(_discountInText.firstMatch(raw)?.group(1) ?? '');
-    debugPrint(
-      'InvoiceSuccessPage invoiceId raw="$raw" resolved=$_resolvedInvoiceId discount=$_resolvedDiscountPercent',
-    );
-    _invoiceFuture = _resolvedInvoiceId.isEmpty
-        ? Future<XeroInvoice?>.value(null)
-        : _loadInvoice(_resolvedInvoiceId);
+    final id = widget.invoiceId.trim();
+    debugPrint('InvoiceSuccessPage invoiceId: $id');
+    _invoiceFuture =
+        id.isEmpty ? Future<XeroInvoice?>.value(null) : _loadInvoice(id);
   }
 
   Future<XeroInvoice?> _loadInvoice(String invoiceId) async {
@@ -106,31 +88,6 @@ class _InvoiceSuccessPageState extends State<InvoiceSuccessPage> {
   }
 
   String _formatMoney(double value) => value.toStringAsFixed(2);
-
-  String _formatMultiplier(double factor) {
-    // Prefer compact decimals: 0.8, 0.85, 1 (avoid 0.8000).
-    final asFixed = factor.toStringAsFixed(4);
-    return asFixed.replaceFirst(RegExp(r'\.?0+$'), '');
-  }
-
-  /// Invoice subtotal is the final (post-discount) budget from Xero.
-  ///
-  /// Examples:
-  /// - discount 20 → `83.61 * 0.8 = AUD 66.89`
-  /// - discount 0 / missing → `AUD 66.89`
-  String _budgetDisplay({
-    required String currency,
-    required double finalBudget,
-  }) {
-    final discount = _resolvedDiscountPercent;
-    if (discount == null || discount <= 0 || discount >= 100) {
-      return '$currency ${_formatMoney(finalBudget)}';
-    }
-
-    final multiplier = 1 - (discount / 100);
-    final basicBudget = finalBudget / multiplier;
-    return '${_formatMoney(basicBudget)} * ${_formatMultiplier(multiplier)} = $currency ${_formatMoney(finalBudget)}';
-  }
 
   String _formatDate(dynamic value) {
     if (value == null) return '-';
@@ -334,44 +291,6 @@ class _InvoiceSuccessPageState extends State<InvoiceSuccessPage> {
     );
   }
 
-  bool _isInvoicePaid(XeroInvoice invoice) {
-    final status = (invoice.status ?? '').trim().toUpperCase();
-    if (status == 'PAID') return true;
-
-    final due = invoice.amountDue ?? 0;
-    final paid = invoice.amountPaid ?? 0;
-    if (paid > 0 && due <= 0.009) return true;
-    return false;
-  }
-
-  Widget _buildStatusHeader(BuildContext context, {required String title}) {
-    final cs = Theme.of(context).colorScheme;
-    return Row(
-      children: [
-        Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: cs.primaryContainer,
-            borderRadius: BorderRadius.circular(AppRadius.lg),
-          ),
-          child: Icon(
-            Icons.check_rounded,
-            size: 26,
-            color: cs.onPrimaryContainer,
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Text(
-            title,
-            style: Theme.of(context).textTheme.titleLarge?.semiBold,
-          ),
-        ),
-      ],
-    );
-  }
-
   Widget _buildBudgetSummary(BuildContext context, XeroInvoice invoice) {
     final cs = Theme.of(context).colorScheme;
     final vm = _toViewModel(invoice);
@@ -543,7 +462,7 @@ class _InvoiceSuccessPageState extends State<InvoiceSuccessPage> {
 
           _CompactAmountRow(
             description: 'Budget',
-            value: _budgetDisplay(currency: vm.currency, finalBudget: vm.subtotal),
+            value: '${vm.currency} ${_formatMoney(vm.subtotal)}',
           ),
           const SizedBox(height: 8),
 
@@ -600,7 +519,7 @@ class _InvoiceSuccessPageState extends State<InvoiceSuccessPage> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final id = _resolvedInvoiceId;
+    final id = widget.invoiceId.trim();
 
     return Scaffold(
       appBar: AppBar(
@@ -634,89 +553,74 @@ class _InvoiceSuccessPageState extends State<InvoiceSuccessPage> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          if (id.isEmpty) ...[
-                            _buildStatusHeader(context, title: 'Invoice created'),
-                            const SizedBox(height: 14),
+                          Row(
+                            children: [
+                              Container(
+                                width: 44,
+                                height: 44,
+                                decoration: BoxDecoration(
+                                  color: cs.primaryContainer,
+                                  borderRadius:
+                                      BorderRadius.circular(AppRadius.lg),
+                                ),
+                                child: Icon(
+                                  Icons.check_rounded,
+                                  size: 26,
+                                  color: cs.onPrimaryContainer,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  'Invoice created',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .titleLarge
+                                      ?.semiBold,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 14),
+
+                          if (id.isEmpty)
                             const _InlineErrorCard(
                               title: 'Missing invoice id',
                               subtitle:
                                   'This page requires an invoice id in the URL.',
-                            ),
-                          ] else
+                            )
+                          else
                             FutureBuilder<XeroInvoice?>(
                               future: _invoiceFuture,
                               builder: (context, snap) {
                                 if (snap.connectionState ==
                                     ConnectionState.waiting) {
-                                  return Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      _buildStatusHeader(
-                                        context,
-                                        title: 'Invoice created',
-                                      ),
-                                      const SizedBox(height: 14),
-                                      const Padding(
-                                        padding:
-                                            EdgeInsets.symmetric(vertical: 24),
-                                        child: Center(
-                                          child: CircularProgressIndicator(),
-                                        ),
-                                      ),
-                                    ],
+                                  return const Padding(
+                                    padding:
+                                        EdgeInsets.symmetric(vertical: 24),
+                                    child: Center(
+                                      child: CircularProgressIndicator(),
+                                    ),
                                   );
                                 }
 
                                 if (snap.hasError) {
-                                  return Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      _buildStatusHeader(
-                                        context,
-                                        title: 'Invoice created',
-                                      ),
-                                      const SizedBox(height: 14),
-                                      _InlineErrorCard(
-                                        title: 'Couldn\'t load invoice',
-                                        subtitle: snap.error.toString(),
-                                      ),
-                                    ],
+                                  return _InlineErrorCard(
+                                    title: 'Couldn\'t load invoice',
+                                    subtitle: snap.error.toString(),
                                   );
                                 }
 
                                 final invoice = snap.data;
                                 if (invoice == null) {
-                                  return Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      _buildStatusHeader(
-                                        context,
-                                        title: 'Invoice created',
-                                      ),
-                                      const SizedBox(height: 14),
-                                      const _InlineErrorCard(
-                                        title: 'Invoice not found',
-                                        subtitle:
-                                            'This invoice could not be loaded.',
-                                      ),
-                                    ],
+                                  return const _InlineErrorCard(
+                                    title: 'Invoice not found',
+                                    subtitle:
+                                        'This invoice could not be loaded.',
                                   );
                                 }
 
-                                final paid = _isInvoicePaid(invoice);
-                                return Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    _buildStatusHeader(
-                                      context,
-                                      title: paid
-                                          ? 'Invoice paid'
-                                          : 'Invoice created',
-                                    ),
-                                    const SizedBox(height: 14),
-                                    _buildBudgetSummary(context, invoice),
-                                  ],
-                                );
+                                return _buildBudgetSummary(context, invoice);
                               },
                             ),
 
@@ -884,10 +788,8 @@ class _CompactAmountRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(
-          flex: 2,
           child: Text(
             description,
             maxLines: 1,
@@ -896,13 +798,9 @@ class _CompactAmountRow extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 12),
-        Expanded(
-          flex: 5,
-          child: Text(
-            value,
-            textAlign: TextAlign.right,
-            style: Theme.of(context).textTheme.bodyMedium?.semiBold,
-          ),
+        Text(
+          value,
+          style: Theme.of(context).textTheme.bodyMedium?.semiBold,
         ),
       ],
     );
