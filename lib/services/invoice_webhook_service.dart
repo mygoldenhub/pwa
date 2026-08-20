@@ -125,11 +125,10 @@ class InvoiceWebhookService {
         debugPrint('--------Invoice ID(decoded)--------');
         debugPrint('$decoded');
         debugPrint('--------Invoice ID--------');
-
       } catch (_) {
         decoded = utf8.decode(res.bodyBytes);
       }
-      return InvoiceWebhookResult(statusCode: res.statusCode, body: decoded);
+      return InvoiceWebhookResult.fromResponse(statusCode: res.statusCode, body: decoded);
     } catch (e) {
       debugPrint('InvoiceWebhookService.createInvoice error: $e');
       rethrow;
@@ -140,5 +139,131 @@ class InvoiceWebhookService {
 class InvoiceWebhookResult {
   final int statusCode;
   final dynamic body;
-  const InvoiceWebhookResult({required this.statusCode, required this.body});
+
+  /// Parsed invoice id from either a plain string body or `{ invoiceid, discount }`.
+  final String? invoiceId;
+
+  /// Trade discount percent from the webhook (e.g. `20` means 20%).
+  final double? discountPercent;
+
+  static final RegExp _uuidPattern = RegExp(
+    r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}',
+  );
+
+  static final RegExp _invoiceIdInText = RegExp(
+    r'invoice[_ ]?id["\s:=]+["\s]*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})',
+    caseSensitive: false,
+  );
+
+  static final RegExp _discountInText = RegExp(
+    r'discount["\s:=]+["\s]*([0-9]+(?:\.[0-9]+)?)',
+    caseSensitive: false,
+  );
+
+  const InvoiceWebhookResult({
+    required this.statusCode,
+    required this.body,
+    this.invoiceId,
+    this.discountPercent,
+  });
+
+  factory InvoiceWebhookResult.fromResponse({
+    required int statusCode,
+    required dynamic body,
+  }) {
+    dynamic parsed = body;
+
+    // Make sometimes returns a JSON object as a quoted/unquoted string.
+    if (parsed is String) {
+      final trimmed = parsed.trim();
+      if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+          (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+        try {
+          parsed = jsonDecode(trimmed);
+        } catch (_) {
+          // Keep as string — Make often returns JS-like objects without quotes.
+        }
+      }
+    }
+
+    String? invoiceId;
+    double? discountPercent;
+
+    if (parsed is Map) {
+      final map = <String, dynamic>{};
+      parsed.forEach((key, value) {
+        map[key.toString()] = value;
+      });
+
+      // Case-insensitive key lookup.
+      String? valueForKeys(List<String> keys) {
+        for (final wanted in keys) {
+          for (final entry in map.entries) {
+            if (entry.key.toLowerCase() == wanted.toLowerCase()) {
+              final text = entry.value?.toString().trim() ?? '';
+              if (text.isNotEmpty) return text;
+            }
+          }
+        }
+        return null;
+      }
+
+      final rawId = valueForKeys(const [
+        'invoiceid',
+        'invoice_id',
+        'invoiceId',
+        'InvoiceID',
+        'InvoiceId',
+        'id',
+      ]);
+      if (rawId != null) {
+        invoiceId = _extractUuid(rawId) ?? rawId;
+      }
+
+      final rawDiscount = valueForKeys(const ['discount', 'Discount']);
+      if (rawDiscount != null) {
+        discountPercent = double.tryParse(rawDiscount);
+      }
+    }
+
+    // Fallback for plain UUID, JS-like `{invoiceid: ..., discount: 20}`, etc.
+    if (invoiceId == null || discountPercent == null) {
+      final text = body?.toString() ?? '';
+      invoiceId ??= _extractInvoiceIdFromText(text);
+      discountPercent ??= _extractDiscountFromText(text);
+    }
+
+    debugPrint(
+      'InvoiceWebhookResult parsed invoiceId=$invoiceId discount=$discountPercent from body=$body',
+    );
+
+    return InvoiceWebhookResult(
+      statusCode: statusCode,
+      body: body,
+      invoiceId: invoiceId,
+      discountPercent: discountPercent,
+    );
+  }
+
+  static String? _extractUuid(String text) {
+    final match = _uuidPattern.firstMatch(text.trim());
+    return match?.group(0);
+  }
+
+  static String? _extractInvoiceIdFromText(String text) {
+    final named = _invoiceIdInText.firstMatch(text);
+    if (named != null) return named.group(1);
+    // Legacy response: body is only the UUID.
+    final only = text.trim();
+    if (_uuidPattern.hasMatch(only) && only.length <= 40) {
+      return _extractUuid(only);
+    }
+    return _extractUuid(text);
+  }
+
+  static double? _extractDiscountFromText(String text) {
+    final match = _discountInText.firstMatch(text);
+    if (match == null) return null;
+    return double.tryParse(match.group(1) ?? '');
+  }
 }

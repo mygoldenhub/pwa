@@ -7,10 +7,12 @@ import 'package:pwa/theme.dart';
 
 class InvoiceSuccessPage extends StatefulWidget {
   final String invoiceId;
+  final double? discountPercent;
 
   const InvoiceSuccessPage({
     super.key,
     required this.invoiceId,
+    this.discountPercent,
   });
 
   @override
@@ -19,14 +21,30 @@ class InvoiceSuccessPage extends StatefulWidget {
 
 class _InvoiceSuccessPageState extends State<InvoiceSuccessPage> {
   late final Future<XeroInvoice?> _invoiceFuture;
+  late final String _resolvedInvoiceId;
+  late final double? _resolvedDiscountPercent;
+
+  static final RegExp _uuidPattern = RegExp(
+    r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}',
+  );
+  static final RegExp _discountInText = RegExp(
+    r'discount["\s:=]+["\s]*([0-9]+(?:\.[0-9]+)?)',
+    caseSensitive: false,
+  );
 
   @override
   void initState() {
     super.initState();
-    final id = widget.invoiceId.trim();
-    debugPrint('InvoiceSuccessPage invoiceId: $id');
-    _invoiceFuture =
-        id.isEmpty ? Future<XeroInvoice?>.value(null) : _loadInvoice(id);
+    final raw = widget.invoiceId.trim();
+    _resolvedInvoiceId = _uuidPattern.firstMatch(raw)?.group(0) ?? raw;
+    _resolvedDiscountPercent = widget.discountPercent ??
+        double.tryParse(_discountInText.firstMatch(raw)?.group(1) ?? '');
+    debugPrint(
+      'InvoiceSuccessPage invoiceId raw="$raw" resolved=$_resolvedInvoiceId discount=$_resolvedDiscountPercent',
+    );
+    _invoiceFuture = _resolvedInvoiceId.isEmpty
+        ? Future<XeroInvoice?>.value(null)
+        : _loadInvoice(_resolvedInvoiceId);
   }
 
   Future<XeroInvoice?> _loadInvoice(String invoiceId) async {
@@ -88,6 +106,31 @@ class _InvoiceSuccessPageState extends State<InvoiceSuccessPage> {
   }
 
   String _formatMoney(double value) => value.toStringAsFixed(2);
+
+  String _formatMultiplier(double factor) {
+    // Prefer compact decimals: 0.8, 0.85, 1 (avoid 0.8000).
+    final asFixed = factor.toStringAsFixed(4);
+    return asFixed.replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
+  /// Invoice subtotal is the final (post-discount) budget from Xero.
+  ///
+  /// Examples:
+  /// - discount 20 → `83.61 * 0.8 = AUD 66.89`
+  /// - discount 0 / missing → `AUD 66.89`
+  String _budgetDisplay({
+    required String currency,
+    required double finalBudget,
+  }) {
+    final discount = _resolvedDiscountPercent;
+    if (discount == null || discount <= 0 || discount >= 100) {
+      return '$currency ${_formatMoney(finalBudget)}';
+    }
+
+    final multiplier = 1 - (discount / 100);
+    final basicBudget = finalBudget / multiplier;
+    return '${_formatMoney(basicBudget)} * ${_formatMultiplier(multiplier)} = $currency ${_formatMoney(finalBudget)}';
+  }
 
   String _formatDate(dynamic value) {
     if (value == null) return '-';
@@ -462,7 +505,7 @@ class _InvoiceSuccessPageState extends State<InvoiceSuccessPage> {
 
           _CompactAmountRow(
             description: 'Budget',
-            value: '${vm.currency} ${_formatMoney(vm.subtotal)}',
+            value: _budgetDisplay(currency: vm.currency, finalBudget: vm.subtotal),
           ),
           const SizedBox(height: 8),
 
@@ -519,7 +562,7 @@ class _InvoiceSuccessPageState extends State<InvoiceSuccessPage> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final id = widget.invoiceId.trim();
+    final id = _resolvedInvoiceId;
 
     return Scaffold(
       appBar: AppBar(
@@ -788,8 +831,10 @@ class _CompactAmountRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(
+          flex: 2,
           child: Text(
             description,
             maxLines: 1,
@@ -798,9 +843,13 @@ class _CompactAmountRow extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 12),
-        Text(
-          value,
-          style: Theme.of(context).textTheme.bodyMedium?.semiBold,
+        Expanded(
+          flex: 5,
+          child: Text(
+            value,
+            textAlign: TextAlign.right,
+            style: Theme.of(context).textTheme.bodyMedium?.semiBold,
+          ),
         ),
       ],
     );
