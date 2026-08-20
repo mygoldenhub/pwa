@@ -184,7 +184,14 @@ class AppRouter {
                       path: 'success/:invoiceId',
                       pageBuilder: (context, state) {
                         final invoiceId = state.pathParameters['invoiceId'];
-                        return MaterialPage(child: InvoiceSuccessPage(invoiceId: invoiceId ?? ''));
+                        final discountRaw = state.uri.queryParameters['discount'];
+                        final discount = discountRaw == null ? null : double.tryParse(discountRaw);
+                        return MaterialPage(
+                          child: InvoiceSuccessPage(
+                            invoiceId: invoiceId ?? '',
+                            discountPercent: discount,
+                          ),
+                        );
                       },
                     ),
                   ],
@@ -231,7 +238,11 @@ class AppRoutes {
 
   static const String cart = '/app/cart';
   static const String invoice = '/app/invoice';
-  static String invoiceSuccess(String invoiceId) => '/app/invoice/success/${Uri.encodeComponent(invoiceId)}';
+  static String invoiceSuccess(String invoiceId, {num? discount}) {
+    final base = '/app/invoice/success/${Uri.encodeComponent(invoiceId)}';
+    if (discount == null) return base;
+    return '$base?discount=${Uri.encodeComponent(discount.toString())}';
+  }
   static const String account = '/app/account';
 
   static const String stripeCheckoutSuccess = '/app/stripe/success';
