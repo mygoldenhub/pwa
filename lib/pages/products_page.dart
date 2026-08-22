@@ -27,7 +27,7 @@ class ProductsPage extends StatefulWidget {
   State<ProductsPage> createState() => _ProductsPageState();
 }
 
-enum _ScanChoice { barcode, barcodeScanner, productName }
+enum _ScanChoice { barcodeScanner, productName }
 
 class _ScanChoiceSheet extends StatelessWidget {
   const _ScanChoiceSheet();
@@ -44,13 +44,6 @@ class _ScanChoiceSheet extends StatelessWidget {
           const SizedBox(height: AppSpacing.xs),
           Text('Choose how you want to add an item.', style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant)),
           const SizedBox(height: AppSpacing.lg),
-          _ScanChoiceTile(
-            icon: Icons.qr_code_scanner,
-            title: 'Barcode mode',
-            subtitle: 'Use your camera to scan a barcode.',
-            onTap: () => Navigator.of(context).pop(_ScanChoice.barcode),
-          ),
-          const SizedBox(height: AppSpacing.md),
           _ScanChoiceTile(
             icon: Icons.barcode_reader,
             title: 'Scan barcode by barcode scanner',
@@ -186,10 +179,6 @@ class _ProductsPageState extends State<ProductsPage> {
     }
   }
 
-  Future<void> _openViaBarcode() async {
-    await context.push(AppRoutes.barcodeScan);
-  }
-
   Future<void> _openViaBarcodeScanner() async {
     await context.push(AppRoutes.barcodeHardwareScan);
   }
@@ -242,8 +231,6 @@ class _ProductsPageState extends State<ProductsPage> {
 
     if (!mounted || choice == null) return;
     switch (choice) {
-      case _ScanChoice.barcode:
-        await _openViaBarcode();
       case _ScanChoice.barcodeScanner:
         await _openViaBarcodeScanner();
       case _ScanChoice.productName:

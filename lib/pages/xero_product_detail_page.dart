@@ -129,7 +129,7 @@ class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
                     : (result?.message ?? 'This item may have been removed from Xero or not synced yet.'),
                 fromBarcode: _fromBarcode,
                 onLookUpProduct: _openManualLookup,
-                onScanAgain: () => context.go('/app/cart/scan'),
+                onScanAgain: () => context.go(AppRoutes.barcodeHardwareScan),
                 onClose: _close,
               );
             }
