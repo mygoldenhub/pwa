@@ -4,6 +4,7 @@ import 'package:pwa/app_state.dart';
 import 'package:pwa/pages/account_page.dart';
 import 'package:pwa/pages/app_shell_page.dart';
 import 'package:pwa/pages/auth_callback_page.dart';
+import 'package:pwa/pages/barcode_hardware_scanner_page.dart';
 import 'package:pwa/pages/barcode_scanner_page.dart';
 import 'package:pwa/pages/barcode_result_page.dart';
 import 'package:pwa/pages/invoice_page.dart';
@@ -128,6 +129,13 @@ class AppRouter {
                   ),
                   routes: [
                     GoRoute(
+                      path: 'scan-scanner',
+                      pageBuilder: (context, state) => MaterialPage(
+                        key: state.pageKey,
+                        child: const BarcodeHardwareScannerPage(),
+                      ),
+                    ),
+                    GoRoute(
                       path: 'scan',
                       pageBuilder: (context, state) => MaterialPage(
                         key: state.pageKey,
@@ -248,6 +256,7 @@ class AppRoutes {
   static const String stripeCheckoutSuccess = '/app/stripe/success';
 
   static const String barcodeScan = '/app/cart/scan';
+  static const String barcodeHardwareScan = '/app/cart/scan-scanner';
   static String barcodeResult(String barcode) =>
       '/app/cart/barcode/${Uri.encodeComponent(barcode)}';
   static const String productNew = '/app/cart/new';
