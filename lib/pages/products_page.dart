@@ -27,7 +27,7 @@ class ProductsPage extends StatefulWidget {
   State<ProductsPage> createState() => _ProductsPageState();
 }
 
-enum _ScanChoice { barcode, barcodeScanner, productName }
+enum _ScanChoice { barcode, productName }
 
 class _ScanChoiceSheet extends StatelessWidget {
   const _ScanChoiceSheet();
@@ -49,13 +49,6 @@ class _ScanChoiceSheet extends StatelessWidget {
             title: 'Barcode mode',
             subtitle: 'Use your camera to scan a barcode.',
             onTap: () => Navigator.of(context).pop(_ScanChoice.barcode),
-          ),
-          const SizedBox(height: AppSpacing.md),
-          _ScanChoiceTile(
-            icon: Icons.barcode_reader,
-            title: 'Scan barcode by barcode scanner',
-            subtitle: 'Use a connected barcode scanner device.',
-            onTap: () => Navigator.of(context).pop(_ScanChoice.barcodeScanner),
           ),
           const SizedBox(height: AppSpacing.md),
           _ScanChoiceTile(
@@ -190,10 +183,6 @@ class _ProductsPageState extends State<ProductsPage> {
     await context.push(AppRoutes.barcodeScan);
   }
 
-  Future<void> _openViaBarcodeScanner() async {
-    await context.push(AppRoutes.barcodeHardwareScan);
-  }
-
   Future<void> _openViaProductName() async {
     final selected = await showXeroProductNamePicker(context, initialQuery: _query.trim());
     if (!mounted || selected == null) return;
@@ -244,8 +233,6 @@ class _ProductsPageState extends State<ProductsPage> {
     switch (choice) {
       case _ScanChoice.barcode:
         await _openViaBarcode();
-      case _ScanChoice.barcodeScanner:
-        await _openViaBarcodeScanner();
       case _ScanChoice.productName:
         await _openViaProductName();
     }

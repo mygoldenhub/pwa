@@ -46,26 +46,15 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
   String? _liveBarcodeValue;
   Timer? _liveClearTimer;
   Timer? _returnTimer;
+  String? _pendingValue;
+  int _pendingHits = 0;
+  DateTime? _pendingFirstSeenAt;
 
-  /// Normalized zoom 0..1. Used by pinch + slider.
-  double _zoom = 0.0;
-  double _pinchStartZoom = 0.0;
   bool _torchOn = false;
   bool _torchBusy = false;
 
-  static const double _previewZoomMin = 1.0;
-  static const double _previewZoomMax = 3.0;
-
-  double get _previewZoomScale =>
-      _previewZoomMin + (_previewZoomMax - _previewZoomMin) * _zoom;
-
-  /// Use Flutter preview zoom when hardware zoom is unavailable (typical on web).
-  bool get _usePreviewZoom => kIsWeb ? !_webCaps.supportsZoom : false;
-
-  /// mobile_scanner CSS-mirrors front/desktop cameras. Only undo that mirror.
-  /// Rear cameras on phones are already unmirrored — flipping them again
-  /// would reverse the live preview and the white-frame crop.
-  bool get _unmirrorWebPreview => kIsWeb && webPreviewIsMirrored();
+  static const int _requiredStableHits = 2;
+  static const Duration _stableHitWindow = Duration(milliseconds: 900);
 
   Rect _guideRectFor(Size size) {
     // EAN-13 is wide and short — keep a wide horizontal capture band.
@@ -78,21 +67,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     );
   }
 
-  double get _decoderPreviewZoom =>
-      _usePreviewZoom ? _previewZoomScale : 1.0;
-
-  /// Guide in camera-widget space. Preview zoom scales the camera under a
-  /// fixed on-screen frame, so the live decode region shrinks toward center.
-  Rect _decodeGuideRect(Size size) {
-    final guide = _guideRectFor(size).inflate(8);
-    final zoom = _decoderPreviewZoom;
-    if (zoom <= 1.001) return guide;
-    return Rect.fromCenter(
-      center: guide.center,
-      width: guide.width / zoom,
-      height: guide.height / zoom,
-    );
-  }
+  Rect _decodeGuideRect(Size size) => _guideRectFor(size).inflate(8);
 
   void _syncWebScanRegion([Size? previewSize]) {
     final size = previewSize ?? _previewSize;
@@ -100,7 +75,6 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     _webPoller.setScanRegion(
       previewSize: size,
       cropInPreview: _guideRectFor(size).inflate(8),
-      previewZoom: _decoderPreviewZoom,
     );
   }
 
@@ -171,8 +145,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     await Future<void>.delayed(const Duration(milliseconds: 500));
     if (!mounted) return;
     caps = probeWebCameraCapabilities();
-    if (caps.supportsTorch != _webCaps.supportsTorch ||
-        caps.supportsZoom != _webCaps.supportsZoom) {
+    if (caps.supportsTorch != _webCaps.supportsTorch) {
       setState(() => _webCaps = caps);
     }
     _syncWebPreviewCss();
@@ -186,7 +159,6 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
         onCode: (value) => _handleDecodedValue(value),
         previewSize: _previewSize,
         cropInPreview: crop,
-        previewZoom: _decoderPreviewZoom,
       );
     }
   }
@@ -204,6 +176,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
       await releaseWebCameraTracks();
       if (!mounted || _didReturn) return;
       await start();
+      unawaited(focusCameraAt(const Offset(0.5, 0.5)));
       _syncWebPreviewCss();
     } catch (e) {
       debugPrint('Camera start failed, retrying after release: $e');
@@ -215,6 +188,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
       if (!mounted || _didReturn) return;
       try {
         await start();
+        unawaited(focusCameraAt(const Offset(0.5, 0.5)));
         _syncWebPreviewCss();
       } catch (e2) {
         debugPrint('Camera start retry failed: $e2');
@@ -250,6 +224,9 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
       _webControlsProbed = false;
       _webCaps = const WebCameraCapabilities.unsupported();
       _torchOn = false;
+      _pendingValue = null;
+      _pendingHits = 0;
+      _pendingFirstSeenAt = null;
     });
     _shutdownFuture = null;
     _cameraSession = _shutdownCamera();
@@ -269,6 +246,9 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     _didReturn = true;
     _returnTimer?.cancel();
     _liveClearTimer?.cancel();
+    _pendingValue = null;
+    _pendingHits = 0;
+    _pendingFirstSeenAt = null;
     _cameraSession = _shutdownCamera();
     await _cameraSession;
     if (!mounted) return;
@@ -337,13 +317,31 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     final value = BarcodeNormalize.primary(raw) ?? raw.trim();
     if (value.isEmpty) return;
 
-    debugPrint('Barcode accepted in frame: $raw -> $value');
+    final now = DateTime.now();
+    final withinWindow = _pendingFirstSeenAt != null &&
+        now.difference(_pendingFirstSeenAt!) <= _stableHitWindow;
+    if (_pendingValue == value && withinWindow) {
+      _pendingHits += 1;
+    } else {
+      _pendingValue = value;
+      _pendingHits = 1;
+      _pendingFirstSeenAt = now;
+    }
+
+    debugPrint(
+      'Barcode candidate: $raw -> $value (hit $_pendingHits/$_requiredStableHits)',
+    );
 
     setState(() {
       _liveBarcodeValue = value;
       _liveBarcodeRect = mapped ??
           (_previewSize == Size.zero ? null : _guideRectFor(_previewSize));
     });
+
+    if (_pendingHits < _requiredStableHits) return;
+    _pendingValue = null;
+    _pendingHits = 0;
+    _pendingFirstSeenAt = null;
 
     _returnTimer ??= Timer(const Duration(milliseconds: 250), () {
       if (!mounted) return;
@@ -397,43 +395,13 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
 
     // Production Flutter web (CanvasKit/Skwasm) freezes HtmlElementView when a
     // parent uses Transform or ClipRect. Keep the live <video> untransformed
-    // and apply zoom/un-mirror with CSS instead.
-    if (kIsWeb) return content;
-
-    final sx = (_unmirrorWebPreview ? -1.0 : 1.0) * (_usePreviewZoom ? _previewZoomScale : 1.0);
-    final sy = _usePreviewZoom ? _previewZoomScale : 1.0;
-
-    if (sx == 1.0 && sy == 1.0) return content;
-
-    return Transform(
-      alignment: Alignment.center,
-      transform: Matrix4.identity()..scaleByDouble(sx, sy, 1, 1),
-      child: content,
-    );
+    // and un-mirror with CSS instead.
+    return content;
   }
 
   void _syncWebPreviewCss() {
     if (!kIsWeb) return;
-    applyWebVideoPreviewStyle(zoom: _usePreviewZoom ? _previewZoomScale : 1.0);
-  }
-
-  Future<void> _applyZoom(double normalized) async {
-    final next = normalized.clamp(0.0, 1.0);
-    setState(() => _zoom = next);
-    _syncWebScanRegion();
-    _syncWebPreviewCss();
-
-    if (kIsWeb && _webCaps.supportsZoom) {
-      await setWebCameraZoom(next);
-      return;
-    }
-    if (!kIsWeb) {
-      try {
-        await _controller.setZoomScale(next);
-      } catch (e) {
-        debugPrint('Zoom not supported: $e');
-      }
-    }
+    applyWebVideoPreviewStyle();
   }
 
   Future<void> _toggleTorch() async {
@@ -588,24 +556,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
                   },
                 );
 
-                return GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onScaleStart: (details) {
-                    _pinchStartZoom = _zoom;
-                  },
-                  onScaleUpdate: (details) {
-                    if (details.pointerCount < 2 && (details.scale - 1).abs() < 0.01) {
-                      return;
-                    }
-                    final startScale = _previewZoomMin +
-                        (_previewZoomMax - _previewZoomMin) * _pinchStartZoom;
-                    final nextScale =
-                        (startScale * details.scale).clamp(_previewZoomMin, _previewZoomMax);
-                    final nextZoom =
-                        (nextScale - _previewZoomMin) / (_previewZoomMax - _previewZoomMin);
-                    unawaited(_applyZoom(nextZoom));
-                  },
-                  child: Stack(
+                return Stack(
                     fit: StackFit.expand,
                     clipBehavior: Clip.none,
                     children: [
@@ -658,8 +609,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
                           ),
                         ),
                     ],
-                  ),
-                );
+                  );
               },
             ),
           ),
@@ -676,29 +626,6 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
                           color: Colors.white.withValues(alpha: 0.85),
                         ),
                     textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: AppSpacing.xs),
-                  Text(
-                    'Tip: for on-screen barcodes, zoom so bars are large and sharp',
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: Colors.white.withValues(alpha: 0.7),
-                        ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: AppSpacing.sm),
-                  Row(
-                    children: [
-                      const Icon(Icons.zoom_out, color: Colors.white70, size: 18),
-                      Expanded(
-                        child: Slider(
-                          value: _zoom,
-                          onChanged: (v) => unawaited(_applyZoom(v)),
-                          activeColor: Colors.white,
-                          inactiveColor: Colors.white24,
-                        ),
-                      ),
-                      const Icon(Icons.zoom_in, color: Colors.white70, size: 18),
-                    ],
                   ),
                   if (_lastError != null) ...[
                     const SizedBox(height: AppSpacing.sm),

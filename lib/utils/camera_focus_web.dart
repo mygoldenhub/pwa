@@ -29,7 +29,7 @@ Future<bool> _applyConstraints(JSObject track, JSObject constraints) async {
     }
     return true;
   } catch (_) {
-    // Laptop webcams often throw OverconstrainedError for focus/zoom.
+    // Laptop webcams often throw OverconstrainedError for focus.
     return false;
   }
 }
@@ -151,48 +151,22 @@ bool _isAppleMobileWeb() {
   }
 }
 
-({double min, double max})? _zoomRange(Map<Object?, Object?>? caps) {
-  if (caps == null) return null;
-  final zoom = caps['zoom'];
-  if (zoom is Map) {
-    final min = zoom['min'];
-    final max = zoom['max'];
-    if (min is num && max is num && max > min) {
-      return (min: min.toDouble(), max: max.toDouble());
-    }
-  }
-  // Some browsers expose zoom as `{min,max}` only.
-  return null;
-}
-
 WebCameraCapabilities probeWebCameraCapabilities() {
   final tracks = _liveVideoTracks();
   if (tracks.isEmpty) return const WebCameraCapabilities.unsupported();
 
   var supportsFocus = false;
-  var supportsZoom = false;
   var supportsTorch = false;
-  var zoomMin = 1.0;
-  var zoomMax = 1.0;
 
   for (final track in tracks) {
     final caps = _capabilitiesOf(track);
     if (_focusSupported(caps)) supportsFocus = true;
     if (_torchSupported(caps)) supportsTorch = true;
-    final zoom = _zoomRange(caps);
-    if (zoom != null) {
-      supportsZoom = true;
-      zoomMin = zoom.min;
-      zoomMax = zoom.max;
-    }
   }
 
   return WebCameraCapabilities(
     supportsFocus: supportsFocus,
-    supportsZoom: supportsZoom,
     supportsTorch: supportsTorch,
-    zoomMin: zoomMin,
-    zoomMax: zoomMax,
   );
 }
 
@@ -217,7 +191,7 @@ Future<WebCameraCapabilities> enableContinuousCameraFocus() async {
   return caps;
 }
 
-/// Tap/manual focus. Uses hardware focus when available, otherwise zoom.
+/// Tap/manual focus. Uses hardware focus when available.
 Future<bool> focusCameraAt(Offset normalizedPoint) async {
   final caps = probeWebCameraCapabilities();
   var changed = false;
@@ -247,36 +221,6 @@ Future<bool> focusCameraAt(Offset normalizedPoint) async {
     }
   }
 
-  if (!changed && caps.supportsZoom) {
-    // Map vertical tap to zoom: top = max zoom, bottom = min zoom.
-    final t = (1.0 - normalizedPoint.dy.clamp(0.0, 1.0));
-    changed = await setWebCameraZoom(t) || changed;
-  }
-
-  return changed;
-}
-
-/// [normalized] is 0..1 within the camera's zoom range.
-Future<bool> setWebCameraZoom(double normalized) async {
-  final caps = probeWebCameraCapabilities();
-  if (!caps.supportsZoom) return false;
-
-  final t = normalized.clamp(0.0, 1.0);
-  final zoom = caps.zoomMin + (caps.zoomMax - caps.zoomMin) * t;
-  var changed = false;
-
-  for (final track in _liveVideoTracks()) {
-    final trackCaps = _capabilitiesOf(track);
-    if (_zoomRange(trackCaps) == null) continue;
-
-    // Try simple constraint first, then advanced.
-    final ok = await _applyIdeal(track, {'zoom': zoom});
-    if (ok) {
-      changed = true;
-    } else {
-      changed = await _applyAdvanced(track, {'zoom': zoom}) || changed;
-    }
-  }
   return changed;
 }
 
@@ -322,8 +266,7 @@ bool webPreviewIsMirrored() {
 
 bool webIsAppleMobile() => _isAppleMobileWeb();
 
-void applyWebVideoPreviewStyle({required double zoom}) {
-  final z = zoom.isFinite ? zoom.clamp(1.0, 8.0) : 1.0;
+void applyWebVideoPreviewStyle() {
   try {
     final videos = _document.callMethod('querySelectorAll'.toJS, 'video'.toJS);
     if (videos == null) return;
@@ -339,8 +282,7 @@ void applyWebVideoPreviewStyle({required double zoom}) {
       if (style == null) continue;
       final jsStyle = style as JSObject;
       // Replace plugin CSS (scaleX(-1)) so Flutter Transform is not needed.
-      jsStyle.setProperty('transform'.toJS, 'scale($z, $z)'.toJS);
-      jsStyle.setProperty('transformOrigin'.toJS, 'center center'.toJS);
+      jsStyle.setProperty('transform'.toJS, 'none'.toJS);
       jsStyle.setProperty('objectFit'.toJS, 'cover'.toJS);
       jsStyle.setProperty('width'.toJS, '100%'.toJS);
       jsStyle.setProperty('height'.toJS, '100%'.toJS);

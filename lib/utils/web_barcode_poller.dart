@@ -8,10 +8,8 @@ typedef WebBarcodePoller = impl.WebBarcodePoller;
 Future<String?> detectFromActiveVideo({
   Size previewSize = Size.zero,
   Rect cropInPreview = Rect.zero,
-  double previewZoom = 1.0,
 }) =>
     impl.detectFromActiveVideo(
       previewSize: previewSize,
       cropInPreview: cropInPreview,
-      previewZoom: previewZoom,
     );
