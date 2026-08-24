@@ -23,10 +23,14 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
   late final MobileScannerController _controller = MobileScannerController(
     autoStart: false,
     facing: CameraFacing.back,
-    detectionSpeed: DetectionSpeed.unrestricted,
+    // Pause between engine reports so aiming does not fire accidental scans.
+    detectionSpeed: DetectionSpeed.normal,
+    detectionTimeoutMs: 1000,
+    // Native ML Kit / Vision zooms in when a barcode is small or far.
+    autoZoom: !kIsWeb,
     // Empty = all formats. Restricting formats can miss EAN-13 on some backends.
     formats: const [],
-    cameraResolution: const Size(1920, 1080),
+    cameraResolution: kIsWeb ? null : const Size(1920, 1080),
   );
 
   final WebBarcodePoller _webPoller = WebBarcodePoller();
@@ -46,6 +50,17 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
   String? _liveBarcodeValue;
   Timer? _liveClearTimer;
   Timer? _returnTimer;
+  String? _pendingValue;
+  int _pendingHits = 0;
+  DateTime? _pendingFirstAt;
+  bool _closeRangeLensApplied = false;
+
+  static const int _requiredHits = 2;
+  static const Duration _hitWindow = Duration(milliseconds: 2200);
+  static const Duration _focusWarmup = Duration(milliseconds: 600);
+
+  bool _readyToScan = false;
+  Timer? _warmupTimer;
 
   /// Normalized zoom 0..1. Used by pinch + slider.
   double _zoom = 0.0;
@@ -127,8 +142,9 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
         unawaited(_ensureCameraStarted());
       case AppLifecycleState.hidden:
       case AppLifecycleState.paused:
-        // Don't stop on `inactive` — the camera permission dialog uses it on web
-        // and would kill the first successful start.
+        // Web: permission dialogs / tab focus fire paused and would kill
+        // getUserMedia, causing "Device in use" on the next start.
+        if (kIsWeb) return;
         unawaited(_controller.stop());
       default:
         break;
@@ -198,6 +214,8 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
 
     Future<void> start() async {
       await _controller.start();
+      await _applyCloseRangeLensIfNeeded();
+      _armScanWarmup();
     }
 
     try {
@@ -250,6 +268,11 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
       _webControlsProbed = false;
       _webCaps = const WebCameraCapabilities.unsupported();
       _torchOn = false;
+      _closeRangeLensApplied = false;
+      _pendingValue = null;
+      _pendingHits = 0;
+      _pendingFirstAt = null;
+      _readyToScan = false;
     });
     _shutdownFuture = null;
     _cameraSession = _shutdownCamera();
@@ -269,6 +292,10 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     _didReturn = true;
     _returnTimer?.cancel();
     _liveClearTimer?.cancel();
+    _warmupTimer?.cancel();
+    _pendingValue = null;
+    _pendingHits = 0;
+    _pendingFirstAt = null;
     _cameraSession = _shutdownCamera();
     await _cameraSession;
     if (!mounted) return;
@@ -332,12 +359,52 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     return overlapArea >= barcodeArea * 0.55;
   }
 
+  void _armScanWarmup() {
+    _warmupTimer?.cancel();
+    _readyToScan = false;
+    _warmupTimer = Timer(_focusWarmup, () {
+      if (!mounted || _didReturn) return;
+      _readyToScan = true;
+    });
+  }
+
+  Future<void> _applyCloseRangeLensIfNeeded() async {
+    if (kIsWeb || _closeRangeLensApplied || !mounted || _didReturn) return;
+    _closeRangeLensApplied = true;
+    try {
+      final best = await _controller.getBestCloseRangeScanningLens(
+        facing: CameraFacing.back,
+      );
+      if (best == null || best == CameraLensType.any) return;
+      final supported = await _controller.getSupportedLenses(
+        facing: CameraFacing.back,
+      );
+      if (!supported.contains(best)) return;
+      if (_controller.value.cameraLensType == best) return;
+      await _controller.switchCamera(
+        SelectCamera(facingDirection: CameraFacing.back, lensType: best),
+      );
+    } catch (e) {
+      debugPrint('Close-range lens skipped: $e');
+    }
+  }
+
   void _handleDecodedValue(String raw, {Rect? mapped}) {
-    if (_didReturn) return;
+    if (_didReturn || !_readyToScan) return;
     final value = BarcodeNormalize.primary(raw) ?? raw.trim();
     if (value.isEmpty) return;
 
-    debugPrint('Barcode accepted in frame: $raw -> $value');
+    final now = DateTime.now();
+    final sameCode = _pendingValue == value &&
+        _pendingFirstAt != null &&
+        now.difference(_pendingFirstAt!) <= _hitWindow;
+    if (sameCode) {
+      _pendingHits += 1;
+    } else {
+      _pendingValue = value;
+      _pendingHits = 1;
+      _pendingFirstAt = now;
+    }
 
     setState(() {
       _liveBarcodeValue = value;
@@ -345,7 +412,10 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
           (_previewSize == Size.zero ? null : _guideRectFor(_previewSize));
     });
 
-    _returnTimer ??= Timer(const Duration(milliseconds: 250), () {
+    if (_pendingHits < _requiredHits) return;
+
+    debugPrint('Barcode accepted in frame: $raw -> $value');
+    _returnTimer ??= Timer(const Duration(milliseconds: 350), () {
       if (!mounted) return;
       _openBarcodeResult(value);
     });
@@ -516,6 +586,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     WidgetsBinding.instance.removeObserver(this);
     _liveClearTimer?.cancel();
     _returnTimer?.cancel();
+    _warmupTimer?.cancel();
     _controller.removeListener(_onControllerUpdate);
     _cameraSession = _shutdownCamera().whenComplete(() {
       _controller.dispose();
@@ -568,7 +639,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
                 final scanner = MobileScanner(
                   controller: _controller,
                   fit: BoxFit.cover,
-                  tapToFocus: false,
+                  tapToFocus: !kIsWeb,
                   useAppLifecycleState: false,
                   scanWindow: guideRect,
                   onDetect: _onDetect,
@@ -671,7 +742,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'Hold the barcode inside the white frame',
+                    'Hold the barcode steady inside the white frame',
                     style: Theme.of(context).textTheme.labelMedium?.copyWith(
                           color: Colors.white.withValues(alpha: 0.85),
                         ),
