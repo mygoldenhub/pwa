@@ -59,14 +59,8 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
   Rect? _liveBarcodeRect;
   String? _liveBarcodeValue;
   Timer? _liveClearTimer;
-  Timer? _returnTimer;
-  String? _pendingValue;
-  int _pendingHits = 0;
-  DateTime? _pendingFirstAt;
   bool _closeRangeLensApplied = false;
 
-  static const int _requiredHits = 2;
-  static const Duration _hitWindow = Duration(milliseconds: 2200);
   static const Duration _focusWarmup = Duration(milliseconds: 600);
 
   bool _readyToScan = false;
@@ -279,9 +273,6 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
       _webCaps = const WebCameraCapabilities.unsupported();
       _torchOn = false;
       _closeRangeLensApplied = false;
-      _pendingValue = null;
-      _pendingHits = 0;
-      _pendingFirstAt = null;
       _readyToScan = false;
     });
     _shutdownFuture = null;
@@ -300,12 +291,8 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
   Future<void> _leaveScanner({required VoidCallback afterStop}) async {
     if (_didReturn) return;
     _didReturn = true;
-    _returnTimer?.cancel();
     _liveClearTimer?.cancel();
     _warmupTimer?.cancel();
-    _pendingValue = null;
-    _pendingHits = 0;
-    _pendingFirstAt = null;
     _cameraSession = _shutdownCamera();
     await _cameraSession;
     if (!mounted) return;
@@ -405,31 +392,16 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     final value = BarcodeNormalize.primary(raw) ?? raw.trim();
     if (value.isEmpty) return;
 
-    final now = DateTime.now();
-    final sameCode = _pendingValue == value &&
-        _pendingFirstAt != null &&
-        now.difference(_pendingFirstAt!) <= _hitWindow;
-    if (sameCode) {
-      _pendingHits += 1;
-    } else {
-      _pendingValue = value;
-      _pendingHits = 1;
-      _pendingFirstAt = now;
-    }
-
+    // Lock immediately so a quick move cannot freeze the overlay without
+    // advancing. Show the value, then go to product lookup in the same turn.
+    _readyToScan = false;
     setState(() {
       _liveBarcodeValue = value;
       _liveBarcodeRect = mapped ??
           (_previewSize == Size.zero ? null : _guideRectFor(_previewSize));
     });
-
-    if (_pendingHits < _requiredHits) return;
-
     debugPrint('Barcode accepted in frame: $raw -> $value');
-    _returnTimer ??= Timer(const Duration(milliseconds: 350), () {
-      if (!mounted) return;
-      _openBarcodeResult(value);
-    });
+    _openBarcodeResult(value);
   }
 
   bool _looksLikeQrPayload(String raw) {
@@ -625,7 +597,6 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _liveClearTimer?.cancel();
-    _returnTimer?.cancel();
     _warmupTimer?.cancel();
     _controller.removeListener(_onControllerUpdate);
     _cameraSession = _shutdownCamera().whenComplete(() {
