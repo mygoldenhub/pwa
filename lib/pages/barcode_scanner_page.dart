@@ -28,8 +28,18 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     detectionTimeoutMs: 1000,
     // Native ML Kit / Vision zooms in when a barcode is small or far.
     autoZoom: !kIsWeb,
-    // Empty = all formats. Restricting formats can miss EAN-13 on some backends.
-    formats: const [],
+    // 1D product barcodes only — QR / Data Matrix / PDF417 are ignored.
+    formats: const [
+      BarcodeFormat.ean13,
+      BarcodeFormat.ean8,
+      BarcodeFormat.upcA,
+      BarcodeFormat.upcE,
+      BarcodeFormat.code128,
+      BarcodeFormat.code39,
+      BarcodeFormat.code93,
+      BarcodeFormat.codabar,
+      BarcodeFormat.itf14,
+    ],
     cameraResolution: kIsWeb ? null : const Size(1920, 1080),
   );
 
@@ -391,6 +401,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
 
   void _handleDecodedValue(String raw, {Rect? mapped}) {
     if (_didReturn || !_readyToScan) return;
+    if (_looksLikeQrPayload(raw)) return;
     final value = BarcodeNormalize.primary(raw) ?? raw.trim();
     if (value.isEmpty) return;
 
@@ -421,6 +432,37 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     });
   }
 
+  bool _looksLikeQrPayload(String raw) {
+    final t = raw.trim().toLowerCase();
+    return t.startsWith('http://') ||
+        t.startsWith('https://') ||
+        t.startsWith('www.') ||
+        t.startsWith('mailto:') ||
+        t.startsWith('tel:');
+  }
+
+  bool _isLinearProductBarcode(Barcode barcode, String raw) {
+    switch (barcode.format) {
+      case BarcodeFormat.ean13:
+      case BarcodeFormat.ean8:
+      case BarcodeFormat.upcA:
+      case BarcodeFormat.upcE:
+      case BarcodeFormat.code128:
+      case BarcodeFormat.code39:
+      case BarcodeFormat.code93:
+      case BarcodeFormat.codabar:
+      case BarcodeFormat.itf14:
+      case BarcodeFormat.itf2of5:
+      case BarcodeFormat.itf2of5WithChecksum:
+      case BarcodeFormat.dataBar:
+      case BarcodeFormat.dataBarExpanded:
+      case BarcodeFormat.dataBarLimited:
+        return true;
+      default:
+        return BarcodeNormalize.looksLikeProductBarcode(raw);
+    }
+  }
+
   void _onDetect(BarcodeCapture capture) {
     if (_didReturn) return;
     if (capture.barcodes.isEmpty) return;
@@ -431,11 +473,9 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     for (final barcode in capture.barcodes) {
       final raw = (barcode.rawValue ?? barcode.displayValue)?.trim();
       if (raw == null || raw.isEmpty) continue;
+      if (!_isLinearProductBarcode(barcode, raw)) continue;
 
       final mapped = _mapBarcodeToPreview(barcode, capture.size);
-      // No corner data (common on some web backends) — skip this hit so we
-      // don't accept barcodes from outside the white frame. The cropped
-      // poller still reads codes that sit in the rectangle.
       if (mapped == null) continue;
       if (!_barcodeIsInGuide(mapped, guideRect)) continue;
 

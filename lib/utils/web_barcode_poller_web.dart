@@ -103,18 +103,13 @@ JSObject? _makeDetector(JSAny detectorCtor) {
       'code_39'.toJS,
       'codabar'.toJS,
       'itf'.toJS,
-      'qr_code'.toJS,
     ].toJS,
   );
   try {
     return (detectorCtor as JSFunction).callAsConstructor(options) as JSObject;
-  } catch (_) {
-    try {
-      return (detectorCtor as JSFunction).callAsConstructor() as JSObject;
-    } catch (e) {
-      debugPrint('BarcodeDetector constructor failed: $e');
-      return null;
-    }
+  } catch (e) {
+    debugPrint('BarcodeDetector constructor failed: $e');
+    return null;
   }
 }
 
@@ -238,11 +233,44 @@ Future<String?> detectFromActiveVideo({
   final dartList = list.dartify();
   if (dartList is! List || dartList.isEmpty) return null;
 
+  String? linearRaw;
+
   for (final item in dartList) {
-    if (item is Map) {
-      final raw = item['rawValue']?.toString().trim();
-      if (raw != null && raw.isNotEmpty) return raw;
+    if (item is! Map) continue;
+    final raw = item['rawValue']?.toString().trim();
+    if (raw == null || raw.isEmpty) continue;
+    final format = item['format']?.toString().toLowerCase() ?? '';
+    if (_webFormatIsLinear(format, raw)) {
+      linearRaw ??= raw;
     }
   }
-  return null;
+
+  return linearRaw;
+}
+
+bool _webFormatIsLinear(String format, String raw) {
+  if (format.contains('qr') ||
+      format.contains('aztec') ||
+      format.contains('pdf417') ||
+      format.contains('data_matrix') ||
+      format.contains('datamatrix')) {
+    return false;
+  }
+  if (format.contains('ean') ||
+      format.contains('upc') ||
+      format.contains('code_128') ||
+      format.contains('code_39') ||
+      format.contains('code_93') ||
+      format.contains('codabar') ||
+      format.contains('itf') ||
+      format.contains('databar')) {
+    return true;
+  }
+  final digits = raw.replaceAll(RegExp(r'\D'), '');
+  return digits.isNotEmpty &&
+      digits.length == raw.length &&
+      (digits.length == 8 ||
+          digits.length == 12 ||
+          digits.length == 13 ||
+          digits.length == 14);
 }
