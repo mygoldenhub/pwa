@@ -26,8 +26,6 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     // Pause between engine reports so aiming does not fire accidental scans.
     detectionSpeed: DetectionSpeed.normal,
     detectionTimeoutMs: 1000,
-    // Native ML Kit / Vision zooms in when a barcode is small or far.
-    autoZoom: !kIsWeb,
     // 1D product barcodes only — QR / Data Matrix / PDF417 are ignored.
     formats: const [
       BarcodeFormat.ean13,
@@ -66,25 +64,8 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
   bool _readyToScan = false;
   Timer? _warmupTimer;
 
-  /// Normalized zoom 0..1. Used by pinch + slider.
-  double _zoom = 0.0;
-  double _pinchStartZoom = 0.0;
   bool _torchOn = false;
   bool _torchBusy = false;
-
-  static const double _previewZoomMin = 1.0;
-  static const double _previewZoomMax = 3.0;
-
-  double get _previewZoomScale =>
-      _previewZoomMin + (_previewZoomMax - _previewZoomMin) * _zoom;
-
-  /// Use Flutter preview zoom when hardware zoom is unavailable (typical on web).
-  bool get _usePreviewZoom => kIsWeb ? !_webCaps.supportsZoom : false;
-
-  /// mobile_scanner CSS-mirrors front/desktop cameras. Only undo that mirror.
-  /// Rear cameras on phones are already unmirrored — flipping them again
-  /// would reverse the live preview and the white-frame crop.
-  bool get _unmirrorWebPreview => kIsWeb && webPreviewIsMirrored();
 
   Rect _guideRectFor(Size size) {
     // EAN-13 is wide and short — keep a wide horizontal capture band.
@@ -97,21 +78,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     );
   }
 
-  double get _decoderPreviewZoom =>
-      _usePreviewZoom ? _previewZoomScale : 1.0;
-
-  /// Guide in camera-widget space. Preview zoom scales the camera under a
-  /// fixed on-screen frame, so the live decode region shrinks toward center.
-  Rect _decodeGuideRect(Size size) {
-    final guide = _guideRectFor(size).inflate(8);
-    final zoom = _decoderPreviewZoom;
-    if (zoom <= 1.001) return guide;
-    return Rect.fromCenter(
-      center: guide.center,
-      width: guide.width / zoom,
-      height: guide.height / zoom,
-    );
-  }
+  Rect _decodeGuideRect(Size size) => _guideRectFor(size).inflate(8);
 
   void _syncWebScanRegion([Size? previewSize]) {
     final size = previewSize ?? _previewSize;
@@ -119,7 +86,6 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     _webPoller.setScanRegion(
       previewSize: size,
       cropInPreview: _guideRectFor(size).inflate(8),
-      previewZoom: _decoderPreviewZoom,
     );
   }
 
@@ -191,8 +157,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     await Future<void>.delayed(const Duration(milliseconds: 500));
     if (!mounted) return;
     caps = probeWebCameraCapabilities();
-    if (caps.supportsTorch != _webCaps.supportsTorch ||
-        caps.supportsZoom != _webCaps.supportsZoom) {
+    if (caps.supportsTorch != _webCaps.supportsTorch) {
       setState(() => _webCaps = caps);
     }
     _syncWebPreviewCss();
@@ -206,7 +171,6 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
         onCode: (value) => _handleDecodedValue(value),
         previewSize: _previewSize,
         cropInPreview: crop,
-        previewZoom: _decoderPreviewZoom,
       );
     }
   }
@@ -478,44 +442,13 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     );
 
     // Production Flutter web (CanvasKit/Skwasm) freezes HtmlElementView when a
-    // parent uses Transform or ClipRect. Keep the live <video> untransformed
-    // and apply zoom/un-mirror with CSS instead.
-    if (kIsWeb) return content;
-
-    final sx = (_unmirrorWebPreview ? -1.0 : 1.0) * (_usePreviewZoom ? _previewZoomScale : 1.0);
-    final sy = _usePreviewZoom ? _previewZoomScale : 1.0;
-
-    if (sx == 1.0 && sy == 1.0) return content;
-
-    return Transform(
-      alignment: Alignment.center,
-      transform: Matrix4.identity()..scaleByDouble(sx, sy, 1, 1),
-      child: content,
-    );
+    // parent uses Transform or ClipRect. Keep the live <video> untransformed.
+    return content;
   }
 
   void _syncWebPreviewCss() {
     if (!kIsWeb) return;
-    applyWebVideoPreviewStyle(zoom: _usePreviewZoom ? _previewZoomScale : 1.0);
-  }
-
-  Future<void> _applyZoom(double normalized) async {
-    final next = normalized.clamp(0.0, 1.0);
-    setState(() => _zoom = next);
-    _syncWebScanRegion();
-    _syncWebPreviewCss();
-
-    if (kIsWeb && _webCaps.supportsZoom) {
-      await setWebCameraZoom(next);
-      return;
-    }
-    if (!kIsWeb) {
-      try {
-        await _controller.setZoomScale(next);
-      } catch (e) {
-        debugPrint('Zoom not supported: $e');
-      }
-    }
+    applyWebVideoPreviewStyle();
   }
 
   Future<void> _toggleTorch() async {
@@ -670,77 +603,59 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
                   },
                 );
 
-                return GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onScaleStart: (details) {
-                    _pinchStartZoom = _zoom;
-                  },
-                  onScaleUpdate: (details) {
-                    if (details.pointerCount < 2 && (details.scale - 1).abs() < 0.01) {
-                      return;
-                    }
-                    final startScale = _previewZoomMin +
-                        (_previewZoomMax - _previewZoomMin) * _pinchStartZoom;
-                    final nextScale =
-                        (startScale * details.scale).clamp(_previewZoomMin, _previewZoomMax);
-                    final nextZoom =
-                        (nextScale - _previewZoomMin) / (_previewZoomMax - _previewZoomMin);
-                    unawaited(_applyZoom(nextZoom));
-                  },
-                  child: Stack(
-                    fit: StackFit.expand,
-                    clipBehavior: Clip.none,
-                    children: [
-                      if (kIsWeb)
-                        _buildCameraLayer(
+                return Stack(
+                  fit: StackFit.expand,
+                  clipBehavior: Clip.none,
+                  children: [
+                    if (kIsWeb)
+                      _buildCameraLayer(
+                        scanner: scanner,
+                        recognitionRect: recognitionRect,
+                      )
+                    else
+                      ClipRect(
+                        child: _buildCameraLayer(
                           scanner: scanner,
                           recognitionRect: recognitionRect,
-                        )
-                      else
-                        ClipRect(
-                          child: _buildCameraLayer(
-                            scanner: scanner,
-                            recognitionRect: recognitionRect,
-                          ),
-                        ),
-                      Positioned.fill(
-                        child: IgnorePointer(
-                          child: CustomPaint(
-                            painter: _GuideFramePainter(cutout: guideRect),
-                          ),
                         ),
                       ),
-                      if (_liveBarcodeValue != null)
-                        Positioned(
-                          left: 16,
-                          right: 16,
-                          bottom: 24,
-                          child: IgnorePointer(
-                            child: Center(
-                              child: DecoratedBox(
-                                decoration: BoxDecoration(
-                                  color: Colors.black.withValues(alpha: 0.72),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: Colors.white, width: 1.5),
-                                ),
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                  child: Text(
-                                    _liveBarcodeValue!,
-                                    textAlign: TextAlign.center,
-                                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w700,
-                                          letterSpacing: 0.6,
-                                        ),
-                                  ),
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: CustomPaint(
+                          painter: _GuideFramePainter(cutout: guideRect),
+                        ),
+                      ),
+                    ),
+                    if (_liveBarcodeValue != null)
+                      Positioned(
+                        left: 16,
+                        right: 16,
+                        bottom: 24,
+                        child: IgnorePointer(
+                          child: Center(
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.72),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.white, width: 1.5),
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                child: Text(
+                                  _liveBarcodeValue!,
+                                  textAlign: TextAlign.center,
+                                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: 0.6,
+                                      ),
                                 ),
                               ),
                             ),
                           ),
                         ),
-                    ],
-                  ),
+                      ),
+                  ],
                 );
               },
             ),
@@ -758,29 +673,6 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
                           color: Colors.white.withValues(alpha: 0.85),
                         ),
                     textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: AppSpacing.xs),
-                  Text(
-                    'Tip: for on-screen barcodes, zoom so bars are large and sharp',
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: Colors.white.withValues(alpha: 0.7),
-                        ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: AppSpacing.sm),
-                  Row(
-                    children: [
-                      const Icon(Icons.zoom_out, color: Colors.white70, size: 18),
-                      Expanded(
-                        child: Slider(
-                          value: _zoom,
-                          onChanged: (v) => unawaited(_applyZoom(v)),
-                          activeColor: Colors.white,
-                          inactiveColor: Colors.white24,
-                        ),
-                      ),
-                      const Icon(Icons.zoom_in, color: Colors.white70, size: 18),
-                    ],
                   ),
                   if (_lastError != null) ...[
                     const SizedBox(height: AppSpacing.sm),

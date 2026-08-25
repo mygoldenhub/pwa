@@ -11,13 +11,9 @@ export 'package:pwa/utils/camera_focus_types.dart';
 Future<WebCameraCapabilities> enableContinuousCameraFocus() =>
     impl.enableContinuousCameraFocus();
 
-/// Manual focus (or zoom fallback) at a normalized point (0..1).
+/// Manual focus at a normalized point (0..1).
 Future<bool> focusCameraAt(Offset normalizedPoint) =>
     impl.focusCameraAt(normalizedPoint);
-
-/// Set hardware zoom when supported. [normalized] is 0..1.
-Future<bool> setWebCameraZoom(double normalized) =>
-    impl.setWebCameraZoom(normalized);
 
 /// Set flashlight when the browser camera supports torch constraints.
 Future<bool> setWebTorch(bool enabled) => impl.setWebTorch(enabled);
@@ -35,7 +31,6 @@ WebCameraCapabilities probeWebCameraCapabilities() =>
 /// Stop leftover getUserMedia tracks so the camera can start again.
 Future<void> releaseWebCameraTracks() => impl.releaseWebCameraTracks();
 
-/// Zoom / un-mirror the live &lt;video&gt; with CSS.
+/// Un-mirror the live &lt;video&gt; with CSS.
 /// Flutter Transform/ClipRect freeze HtmlElementView in production CanvasKit.
-void applyWebVideoPreviewStyle({required double zoom}) =>
-    impl.applyWebVideoPreviewStyle(zoom: zoom);
+void applyWebVideoPreviewStyle() => impl.applyWebVideoPreviewStyle();

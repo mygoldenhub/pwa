@@ -12,7 +12,6 @@ class WebBarcodePoller {
   void Function(String value)? _onCode;
   Size _previewSize = Size.zero;
   Rect _cropInPreview = Rect.zero;
-  double _previewZoom = 1.0;
 
   bool get isRunning => _timer != null;
 
@@ -24,25 +23,21 @@ class WebBarcodePoller {
   void setScanRegion({
     required Size previewSize,
     required Rect cropInPreview,
-    double previewZoom = 1.0,
   }) {
     _previewSize = previewSize;
     _cropInPreview = cropInPreview;
-    _previewZoom = previewZoom;
   }
 
   void start({
     required void Function(String value) onCode,
     Size? previewSize,
     Rect? cropInPreview,
-    double previewZoom = 1.0,
     Duration interval = const Duration(milliseconds: 150),
   }) {
     stop();
     _onCode = onCode;
     if (previewSize != null) _previewSize = previewSize;
     if (cropInPreview != null) _cropInPreview = cropInPreview;
-    _previewZoom = previewZoom;
     _timer = Timer.periodic(interval, (_) => unawaited(_tick()));
   }
 
@@ -60,7 +55,6 @@ class WebBarcodePoller {
       final code = await detectFromActiveVideo(
         previewSize: _previewSize,
         cropInPreview: _cropInPreview,
-        previewZoom: _previewZoom,
       );
       if (code != null && code.isNotEmpty) {
         _onCode?.call(code);
@@ -111,22 +105,6 @@ JSObject? _makeDetector(JSAny detectorCtor) {
     debugPrint('BarcodeDetector constructor failed: $e');
     return null;
   }
-}
-
-/// Undo Flutter preview zoom (scale around center) so the crop matches the
-/// white frame the user sees, not the full unzoomed camera image.
-Rect _applyInversePreviewZoom(Rect crop, Size preview, double zoom) {
-  if (zoom <= 1.001 || preview.width <= 0 || preview.height <= 0) {
-    return crop;
-  }
-  final cx = preview.width / 2;
-  final cy = preview.height / 2;
-  return Rect.fromLTRB(
-    cx + (crop.left - cx) / zoom,
-    cy + (crop.top - cy) / zoom,
-    cx + (crop.right - cx) / zoom,
-    cy + (crop.bottom - cy) / zoom,
-  );
 }
 
 /// Map a preview-space rect onto video pixels using BoxFit.cover.
@@ -188,7 +166,6 @@ JSObject? _cropVideoToCanvas(JSObject video, double videoW, double videoH, Rect 
 Future<String?> detectFromActiveVideo({
   Size previewSize = Size.zero,
   Rect cropInPreview = Rect.zero,
-  double previewZoom = 1.0,
 }) async {
   // Never decode the full camera frame — wait until the white-rect crop is known.
   if (cropInPreview.width <= 8 ||
@@ -216,8 +193,7 @@ Future<String?> detectFromActiveVideo({
   final detectFn = detector.getProperty('detect'.toJS);
   if (detectFn == null) return null;
 
-  final zoomedCrop = _applyInversePreviewZoom(cropInPreview, previewSize, previewZoom);
-  final videoCrop = _previewRectToVideo(zoomedCrop, previewSize, vw, vh);
+  final videoCrop = _previewRectToVideo(cropInPreview, previewSize, vw, vh);
   if (videoCrop.width < 8 || videoCrop.height < 8) return null;
 
   final cropped = _cropVideoToCanvas(video, vw, vh, videoCrop);
