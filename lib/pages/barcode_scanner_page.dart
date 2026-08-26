@@ -25,7 +25,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     facing: CameraFacing.back,
     // Pause between engine reports so aiming does not fire accidental scans.
     detectionSpeed: DetectionSpeed.normal,
-    detectionTimeoutMs: 1000,
+    detectionTimeoutMs: 250,
     // 1D product barcodes only — QR / Data Matrix / PDF417 are ignored.
     formats: const [
       BarcodeFormat.ean13,
@@ -59,7 +59,9 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
   Timer? _liveClearTimer;
   bool _closeRangeLensApplied = false;
 
-  static const Duration _focusWarmup = Duration(milliseconds: 600);
+  static const Duration _focusWarmup = Duration(milliseconds: 200);
+
+  bool _webPollerStartRequested = false;
 
   bool _readyToScan = false;
   Timer? _warmupTimer;
@@ -83,10 +85,29 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
   void _syncWebScanRegion([Size? previewSize]) {
     final size = previewSize ?? _previewSize;
     if (size == Size.zero) return;
+    final crop = _guideRectFor(size).inflate(8);
     _webPoller.setScanRegion(
       previewSize: size,
-      cropInPreview: _guideRectFor(size).inflate(8),
+      cropInPreview: crop,
     );
+    unawaited(_ensureWebPollerStarted(size, crop));
+  }
+
+  Future<void> _ensureWebPollerStarted(Size size, Rect crop) async {
+    if (!kIsWeb || !mounted || _didReturn) return;
+    if (_webPoller.isRunning || _webPollerStartRequested) return;
+    _webPollerStartRequested = true;
+    try {
+      if (!await _webPoller.isSupported) return;
+      if (!mounted || _didReturn || _webPoller.isRunning) return;
+      _webPoller.start(
+        onCode: (value) => _handleDecodedValue(value),
+        previewSize: size,
+        cropInPreview: crop,
+      );
+    } finally {
+      if (!_webPoller.isRunning) _webPollerStartRequested = false;
+    }
   }
 
   @override
@@ -134,9 +155,12 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
       if (on != _torchOn) setState(() => _torchOn = on);
     }
 
-    if (kIsWeb && state.isRunning && !_webControlsProbed) {
-      _webControlsProbed = true;
-      unawaited(_probeWebControls());
+    if (kIsWeb && state.isRunning) {
+      _syncWebScanRegion();
+      if (!_webControlsProbed) {
+        _webControlsProbed = true;
+        unawaited(_probeWebControls());
+      }
     }
   }
 
@@ -145,8 +169,6 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     if (!mounted) return;
     var caps = await enableContinuousCameraFocus();
     if (!mounted) return;
-
-    final nativeSupported = await _webPoller.isSupported;
 
     setState(() {
       _webCaps = caps;
@@ -161,18 +183,6 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
       setState(() => _webCaps = caps);
     }
     _syncWebPreviewCss();
-
-    // Parallel Chrome BarcodeDetector loop, cropped to the white frame only.
-    if (nativeSupported && !_webPoller.isRunning) {
-      final crop = _previewSize == Size.zero
-          ? Rect.zero
-          : _guideRectFor(_previewSize).inflate(8);
-      _webPoller.start(
-        onCode: (value) => _handleDecodedValue(value),
-        previewSize: _previewSize,
-        cropInPreview: crop,
-      );
-    }
   }
 
   Future<void> _ensureCameraStarted() async {
@@ -191,6 +201,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
       if (!mounted || _didReturn) return;
       await start();
       _syncWebPreviewCss();
+      _syncWebScanRegion();
     } catch (e) {
       debugPrint('Camera start failed, retrying after release: $e');
       try {
@@ -202,6 +213,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
       try {
         await start();
         _syncWebPreviewCss();
+        _syncWebScanRegion();
       } catch (e2) {
         debugPrint('Camera start retry failed: $e2');
         if (!mounted) return;
@@ -215,6 +227,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
   Future<void> _shutdownCamera() {
     return _shutdownFuture ??= () async {
       _webPoller.stop();
+      _webPollerStartRequested = false;
       if (kIsWeb && _torchOn) {
         try {
           await setWebTorch(false);
@@ -412,7 +425,15 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
       if (!_isLinearProductBarcode(barcode, raw)) continue;
 
       final mapped = _mapBarcodeToPreview(barcode, capture.size);
-      if (mapped == null) continue;
+      if (mapped == null) {
+        // Web often omits corners on the first hits. The plugin already
+        // filters to scanWindow, so accept linear codes without a box.
+        if (kIsWeb) {
+          _handleDecodedValue(raw);
+          return;
+        }
+        continue;
+      }
       if (!_barcodeIsInGuide(mapped, guideRect)) continue;
 
       setState(() => _liveBarcodeRect = mapped);
