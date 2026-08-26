@@ -1,10 +1,16 @@
 import 'dart:ui';
 
+import 'package:pwa/utils/web_scan_diagnostics.dart';
+
 /// Stub for non-web platforms.
 class WebBarcodePoller {
   bool get isRunning => false;
 
   Future<bool> get isSupported async => false;
+
+  double? get focusScore => null;
+
+  WebScanDiagnostics get diagnostics => const WebScanDiagnostics.unavailable();
 
   void setScanRegion({
     required Size previewSize,

@@ -4,14 +4,15 @@ import 'dart:js_interop_unsafe';
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
+import 'package:pwa/utils/web_scan_diagnostics.dart';
 
 /// Extra live barcode polling for web.
 ///
 /// mobile_scanner decodes the full camera frame, so a 1D code that only covers
 /// a small part of a 1080p frame ends up with bars that are 1-2 pixels wide and
 /// never decodes. This poller decodes only the framed region, scaled up, and
-/// uses whichever decoder the browser has (native BarcodeDetector, or the
-/// zxing-wasm module that mobile_scanner loads on browsers without it).
+/// uses whichever decoder the browser has (native BarcodeDetector, or
+/// zxing-wasm).
 class WebBarcodePoller {
   Timer? _timer;
   bool _busy = false;
@@ -28,6 +29,15 @@ class WebBarcodePoller {
   /// whether to start polling.
   Future<bool> get isSupported async => _CropDecoder.instance.hasBackend;
 
+  /// How sharp the framed region looked on the last decode attempt.
+  ///
+  /// Mean horizontal gradient across the middle of the crop, so bars in focus
+  /// score high and a blurred frame scores near zero. Null until the first
+  /// frame is measured. Used to drive the focus sweep.
+  double? get focusScore => _CropDecoder.instance.focusScore;
+
+  WebScanDiagnostics get diagnostics => _CropDecoder.instance.diagnostics;
+
   void setScanRegion({
     required Size previewSize,
     required Rect cropInPreview,
@@ -43,6 +53,7 @@ class WebBarcodePoller {
     Duration interval = const Duration(milliseconds: 120),
   }) {
     stop();
+    _CropDecoder.instance.resetSession();
     _onCode = onCode;
     if (previewSize != null) _previewSize = previewSize;
     if (cropInPreview != null) _cropInPreview = cropInPreview;
@@ -88,7 +99,10 @@ Future<String?> detectFromActiveVideo({
   }
 
   final decoder = _CropDecoder.instance;
-  if (!decoder.hasBackend) return null;
+  if (!decoder.hasBackend) {
+    decoder.ensureBackend();
+    return null;
+  }
 
   final video = _firstLiveVideo();
   if (video == null) return null;
@@ -148,15 +162,43 @@ class _CropDecoder {
   /// codes that are small in the frame.
   static const double _upscaleTargetWidth = 1400;
 
+  /// How long the native detector gets on its own before zxing-wasm is fetched
+  /// as a second opinion — about five seconds of polling without a single
+  /// successful read.
+  static const int _nativeGracePeriod = 40;
+
+  /// mobile_scanner uses this id, so loading it here also stops the plugin
+  /// from loading the same script twice.
+  static const String _zxingScriptId = 'mobile-scanner-zxing-wasm';
+  static const String _zxingScriptUrl =
+      'https://cdn.jsdelivr.net/npm/zxing-wasm@3.1.1/dist/iife/reader/index.js';
+
   JSObject? _canvas;
   JSObject? _context;
   JSObject? _detector;
   bool _detectorUnusable = false;
   bool _zxingFormatsRejected = false;
+  bool _zxingRequested = false;
+  double? _focusScore;
+
+  int _attempts = 0;
+  int _decodes = 0;
+  int _nativeAttempts = 0;
+  /// Times zxing read a code that the native detector had just missed. Chrome
+  /// on Android can expose a BarcodeDetector that never returns anything, for
+  /// example when the Play Services barcode module is unavailable.
+  int _nativeMisses = 0;
+  Size _videoSize = Size.zero;
+  Size _cropSize = Size.zero;
+  String? _lastError;
+
+  double? get focusScore => _focusScore;
 
   JSAny? get _detectorCtor => globalContext.getProperty('BarcodeDetector'.toJS);
 
-  /// The `window.ZXingWASM` module, once mobile_scanner has loaded it.
+  bool get _nativeAvailable => !_detectorUnusable && _detectorCtor != null;
+
+  /// The `window.ZXingWASM` module, once the script has run.
   JSObject? get _zxingModule {
     final module = globalContext.getProperty('ZXingWASM'.toJS);
     if (module == null) return null;
@@ -164,25 +206,129 @@ class _CropDecoder {
     return object.getProperty('readBarcodes'.toJS) == null ? null : object;
   }
 
-  bool get hasBackend =>
-      (!_detectorUnusable && _detectorCtor != null) || _zxingModule != null;
+  bool get hasBackend => _nativeAvailable || _zxingModule != null;
+
+  WebScanDiagnostics get diagnostics => WebScanDiagnostics(
+        backend: _backendLabel(),
+        videoSize: _videoSize,
+        cropSize: _cropSize,
+        focusScore: _focusScore,
+        attempts: _attempts,
+        decodes: _decodes,
+        lastError: _lastError,
+      );
+
+  String _backendLabel() {
+    final parts = <String>[
+      if (_nativeAvailable) 'native',
+      if (_zxingModule != null) 'zxing',
+    ];
+    if (parts.isEmpty) return _zxingRequested ? 'loading zxing' : 'none';
+    if (_nativeMisses > 0) parts.add('(native misses: $_nativeMisses)');
+    return parts.join(' + ');
+  }
+
+  /// Make sure at least one decoder will exist.
+  ///
+  /// zxing-wasm is only fetched when it is actually needed: either the browser
+  /// has no BarcodeDetector, or the one it has has read nothing for seconds,
+  /// which is indistinguishable from a broken one. Chrome on Android exposes
+  /// the API on devices where it can never return a result.
+  void ensureBackend() {
+    if (_zxingModule != null || _zxingRequested) return;
+    if (_nativeAvailable &&
+        (_decodes > 0 || _nativeAttempts < _nativeGracePeriod)) {
+      return;
+    }
+    _loadZxing();
+  }
+
+  /// Counters are per camera session; the learned facts about this browser
+  /// (a dead detector, a rejected format list) are not.
+  void resetSession() {
+    _attempts = 0;
+    _decodes = 0;
+    _nativeAttempts = 0;
+    _focusScore = null;
+    _lastError = null;
+  }
+
+  void _loadZxing() {
+    _zxingRequested = true;
+    try {
+      final document = globalContext.getProperty('document'.toJS) as JSObject;
+      final existing = document.callMethod(
+        'querySelector'.toJS,
+        'script#$_zxingScriptId'.toJS,
+      );
+      // mobile_scanner is already loading it.
+      if (existing != null) return;
+
+      final script =
+          document.callMethod('createElement'.toJS, 'script'.toJS) as JSObject?;
+      final head = document.getProperty('head'.toJS) as JSObject?;
+      if (script == null || head == null) return;
+
+      script
+        ..setProperty('id'.toJS, _zxingScriptId.toJS)
+        ..setProperty('async'.toJS, true.toJS)
+        ..setProperty('crossOrigin'.toJS, 'anonymous'.toJS)
+        ..setProperty('src'.toJS, _zxingScriptUrl.toJS)
+        ..setProperty(
+          'onerror'.toJS,
+          (JSAny _) {
+            _lastError = 'zxing-wasm failed to load';
+            debugPrint('zxing-wasm script failed to load');
+          }.toJS,
+        );
+      head.callMethod('appendChild'.toJS, script);
+      debugPrint('Loading zxing-wasm as a fallback decoder');
+    } catch (e) {
+      _lastError = 'zxing load: $e';
+      debugPrint('Could not load zxing-wasm: $e');
+    }
+  }
 
   Future<String?> decode({
     required JSObject video,
     required Rect videoCrop,
   }) async {
     final clock = Stopwatch()..start();
+    _attempts++;
+    _videoSize = Size(
+      (video.getProperty('videoWidth'.toJS)?.dartify() as num? ?? 0).toDouble(),
+      (video.getProperty('videoHeight'.toJS)?.dartify() as num? ?? 0).toDouble(),
+    );
+    _cropSize = videoCrop.size;
+    ensureBackend();
 
     for (final scale in _scalesFor(videoCrop)) {
       final drawn = _drawCrop(video, videoCrop, scale);
       if (drawn == null) continue;
 
+      // Only the unscaled draw is a fair sharpness sample; the enlarged one is
+      // interpolated and always looks softer.
+      if (scale == 1.0) _focusScore = _measureSharpness(drawn);
+
       final native = await _detectNative(drawn);
-      if (native != null) return native;
+      if (native != null) {
+        _decodes++;
+        return native;
+      }
       if (clock.elapsedMilliseconds > _budgetMs) return null;
 
-      final zxing = await _detectZxing(drawn);
-      if (zxing != null) return zxing;
+      final zxing = await _detectZxing(drawn, invert: scale > 1.0);
+      if (zxing != null) {
+        _decodes++;
+        // The native detector had the same pixels and found nothing. A couple
+        // of those and it is not worth calling any more.
+        if (_nativeAvailable && ++_nativeMisses >= 2) {
+          _detectorUnusable = true;
+          _detector = null;
+          debugPrint('BarcodeDetector keeps missing codes, using zxing only');
+        }
+        return zxing;
+      }
       if (clock.elapsedMilliseconds > _budgetMs) return null;
     }
     return null;
@@ -232,6 +378,53 @@ class _CropDecoder {
     }
   }
 
+  /// Mean absolute horizontal gradient over the middle of the crop.
+  ///
+  /// Bars are vertical, so a horizontal gradient is exactly what goes away when
+  /// the lens is focused past them.
+  double? _measureSharpness(_DrawnCrop crop) {
+    final context = _context;
+    if (context == null) return null;
+
+    final width = crop.width < 360 ? crop.width : 360;
+    final height = crop.height < 180 ? crop.height : 180;
+    if (width < 16 || height < 8) return null;
+    final left = ((crop.width - width) / 2).round();
+    final top = ((crop.height - height) / 2).round();
+
+    try {
+      final imageData = context.callMethodVarArgs('getImageData'.toJS, <JSAny>[
+        left.toJS,
+        top.toJS,
+        width.toJS,
+        height.toJS,
+      ]);
+      if (imageData == null) return null;
+      final buffer =
+          (imageData as JSObject).getProperty('data'.toJS) as JSUint8ClampedArray?;
+      if (buffer == null) return null;
+      final pixels = buffer.toDart;
+
+      var total = 0.0;
+      var samples = 0;
+      // Every fourth row is plenty and keeps this off the frame budget.
+      for (var row = 0; row < height; row += 4) {
+        final rowStart = row * width * 4;
+        for (var col = 1; col < width; col++) {
+          final index = rowStart + col * 4 + 1;
+          final delta = pixels[index] - pixels[index - 4];
+          total += delta < 0 ? -delta : delta;
+          samples++;
+        }
+      }
+      if (samples == 0) return null;
+      return total / samples;
+    } catch (e) {
+      debugPrint('Focus measurement failed: $e');
+      return null;
+    }
+  }
+
   JSObject? _ensureCanvas() {
     final existing = _canvas;
     if (existing != null) return existing;
@@ -257,6 +450,7 @@ class _CropDecoder {
   Future<String?> _detectNative(_DrawnCrop crop) async {
     final detector = await _nativeDetector();
     if (detector == null) return null;
+    _nativeAttempts++;
     try {
       final detect = detector.getProperty('detect'.toJS);
       if (detect == null) return null;
@@ -265,6 +459,7 @@ class _CropDecoder {
       final list = await (result as JSPromise).toDart;
       return _firstLinearValue(list?.dartify(), rawKey: 'rawValue');
     } catch (e) {
+      _lastError = 'detector: $e';
       debugPrint('BarcodeDetector detect failed: $e');
       return null;
     }
@@ -318,7 +513,7 @@ class _CropDecoder {
     }
   }
 
-  Future<String?> _detectZxing(_DrawnCrop crop) async {
+  Future<String?> _detectZxing(_DrawnCrop crop, {bool invert = false}) async {
     final module = _zxingModule;
     final context = _context;
     if (module == null || context == null) return null;
@@ -335,7 +530,9 @@ class _CropDecoder {
       final options = JSObject()
         ..setProperty('tryHarder'.toJS, true.toJS)
         ..setProperty('tryRotate'.toJS, true.toJS)
-        ..setProperty('tryInvert'.toJS, true.toJS)
+        // Inverted codes are rare, so that pass is kept for the enlarged
+        // attempt rather than paid for on every frame.
+        ..setProperty('tryInvert'.toJS, invert.toJS)
         ..setProperty('maxNumberOfSymbols'.toJS, 4.toJS);
       if (!_zxingFormatsRejected) {
         options.setProperty(
@@ -355,6 +552,7 @@ class _CropDecoder {
     } catch (e) {
       // An unknown format name makes zxing-wasm throw for every frame; retry
       // without the filter from now on.
+      _lastError = 'zxing: $e';
       if (!_zxingFormatsRejected) {
         _zxingFormatsRejected = true;
         debugPrint('zxing-wasm format filter rejected, using all formats: $e');

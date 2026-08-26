@@ -15,6 +15,17 @@ Future<WebCameraCapabilities> enableContinuousCameraFocus() =>
 Future<bool> focusCameraAt(Offset normalizedPoint) =>
     impl.focusCameraAt(normalizedPoint);
 
+/// Hand the lens back to autofocus, optionally aimed at a normalized point.
+Future<bool> requestWebAutoFocus({Offset? point}) =>
+    impl.requestWebAutoFocus(point: point);
+
+/// The lens positions the camera accepts, or null when it cannot be driven.
+WebFocusRange? webFocusRange() => impl.webFocusRange();
+
+/// Park the lens at an explicit distance.
+Future<bool> setWebFocusDistance(double distance) =>
+    impl.setWebFocusDistance(distance);
+
 /// Set flashlight when the browser camera supports torch constraints.
 Future<bool> setWebTorch(bool enabled) => impl.setWebTorch(enabled);
 
@@ -34,3 +45,6 @@ Future<void> releaseWebCameraTracks() => impl.releaseWebCameraTracks();
 /// Un-mirror the live &lt;video&gt; with CSS.
 /// Flutter Transform/ClipRect freeze HtmlElementView in production CanvasKit.
 void applyWebVideoPreviewStyle() => impl.applyWebVideoPreviewStyle();
+
+/// Keep the preview playing inline, which iPhone browsers require explicitly.
+void ensureWebVideoPlaysInline() => impl.ensureWebVideoPlaysInline();

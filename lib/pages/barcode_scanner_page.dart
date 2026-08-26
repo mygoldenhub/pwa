@@ -10,6 +10,7 @@ import 'package:pwa/nav.dart';
 import 'package:pwa/theme.dart';
 import 'package:pwa/utils/barcode_normalize.dart';
 import 'package:pwa/utils/camera_focus.dart';
+import 'package:pwa/utils/scan_autofocus.dart';
 import 'package:pwa/utils/web_barcode_poller.dart';
 
 class BarcodeScannerPage extends StatefulWidget {
@@ -73,6 +74,46 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
   /// True when the web plugin reports mirrored barcode corners.
   bool _webCornersMirrored = false;
 
+  late final ScanAutoFocus _autoFocus = ScanAutoFocus(
+    focusScore: () => _webPoller.focusScore,
+    pointOfInterest: _guideCenterInCamera,
+    onSearchingChanged: (searching) {
+      if (!mounted) return;
+      setState(() => _focusSearching = searching);
+    },
+  );
+  bool _focusSearching = false;
+
+  /// Long press the hint to see what the scanner is actually doing. Remote
+  /// "it doesn't scan" reports are otherwise unfalsifiable.
+  bool _showDiagnostics = false;
+  Timer? _diagnosticsTimer;
+
+  void _toggleDiagnostics() {
+    setState(() => _showDiagnostics = !_showDiagnostics);
+    _diagnosticsTimer?.cancel();
+    if (!_showDiagnostics) return;
+    HapticFeedback.selectionClick();
+    _diagnosticsTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (!mounted || !_showDiagnostics) return;
+      setState(() {});
+    });
+  }
+
+  List<String> _diagnosticLines() {
+    final reader = kIsWeb ? MobileScannerPlatform.instance.activeWebReader : null;
+    return <String>[
+      ..._webPoller.diagnostics.lines,
+      'plugin reader: ${reader?.name ?? '-'}'
+          '   polling: ${_webPoller.isRunning}',
+      'preview: ${_previewSize.width.round()}x${_previewSize.height.round()}'
+          '   armed: $_readyToScan   mirrored: $_webCornersMirrored',
+      'focus: ${_webCaps.supportsFocus ? 'yes' : 'no'}'
+          '   lens control: ${_webCaps.supportsFocusDistance ? 'yes' : 'no'}'
+          '   searching: $_focusSearching',
+    ];
+  }
+
   Rect _guideRectFor(Size size) {
     // EAN-13 is wide and short — keep a wide horizontal capture band.
     final width = (size.width * 0.88).clamp(260.0, 720.0);
@@ -98,6 +139,34 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
       height: guide.height + size.height * 0.22,
     );
     return expanded.intersect(Offset.zero & size);
+  }
+
+  /// A preview point in camera space, normalized to 0..1, matching the
+  /// BoxFit.cover the preview is drawn with.
+  Offset _normalizedCameraPoint(Offset previewPoint) {
+    final capture = _controller.value.size;
+    if (capture.isEmpty || _previewSize.isEmpty) return const Offset(0.5, 0.5);
+
+    final scaleX = _previewSize.width / capture.width;
+    final scaleY = _previewSize.height / capture.height;
+    final scale = scaleX > scaleY ? scaleX : scaleY;
+    final dx = (_previewSize.width - capture.width * scale) / 2;
+    final dy = (_previewSize.height - capture.height * scale) / 2;
+
+    return Offset(
+      (((previewPoint.dx - dx) / scale) / capture.width).clamp(0.0, 1.0),
+      (((previewPoint.dy - dy) / scale) / capture.height).clamp(0.0, 1.0),
+    );
+  }
+
+  Offset _guideCenterInCamera() {
+    if (_previewSize == Size.zero) return const Offset(0.5, 0.5);
+    return _normalizedCameraPoint(_guideRectFor(_previewSize).center);
+  }
+
+  void _focusAtPreviewPoint(Offset previewPoint) {
+    if (!kIsWeb) return;
+    unawaited(_autoFocus.refocusAt(_normalizedCameraPoint(previewPoint)));
   }
 
   void _syncWebScanRegion([Size? previewSize]) {
@@ -143,6 +212,9 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     if (_didReturn) return;
     switch (state) {
       case AppLifecycleState.resumed:
+        // Mobile browsers pause the <video> element when the tab loses focus,
+        // and it stays paused: the stream is live but the frames are frozen.
+        _syncWebPreviewCss();
         unawaited(_ensureCameraStarted());
       case AppLifecycleState.hidden:
       case AppLifecycleState.paused:
@@ -187,6 +259,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
       _webCaps = caps;
     });
     _syncWebPreviewCss();
+    _autoFocus.start();
 
     // Capabilities (especially torch) can appear a moment after the track is live.
     await Future<void>.delayed(const Duration(milliseconds: 500));
@@ -239,6 +312,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
 
   Future<void> _shutdownCamera() {
     return _shutdownFuture ??= () async {
+      _autoFocus.stop();
       _webPoller.stop();
       if (kIsWeb && _torchOn) {
         try {
@@ -501,6 +575,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
   void _syncWebPreviewCss() {
     if (!kIsWeb) return;
     applyWebVideoPreviewStyle();
+    ensureWebVideoPlaysInline();
     _webCornersMirrored = webPreviewIsMirrored();
   }
 
@@ -582,6 +657,8 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _autoFocus.stop();
+    _diagnosticsTimer?.cancel();
     _liveClearTimer?.cancel();
     _warmupTimer?.cancel();
     _controller.removeListener(_onControllerUpdate);
@@ -675,6 +752,15 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
                           recognitionRect: recognitionRect,
                         ),
                       ),
+                    if (kIsWeb)
+                      Positioned.fill(
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTapDown: (details) =>
+                              _focusAtPreviewPoint(details.localPosition),
+                          child: const SizedBox.expand(),
+                        ),
+                      ),
                     Positioned.fill(
                       child: IgnorePointer(
                         child: CustomPaint(
@@ -723,13 +809,24 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    'Hold the barcode steady inside the white frame',
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                          color: Colors.white.withValues(alpha: 0.85),
-                        ),
-                    textAlign: TextAlign.center,
+                  GestureDetector(
+                    onLongPress: _toggleDiagnostics,
+                    child: Text(
+                      _focusSearching
+                          ? 'Focusing on the barcode — hold still'
+                          : kIsWeb
+                              ? 'Hold the barcode steady inside the white frame. Tap to refocus.'
+                              : 'Hold the barcode steady inside the white frame',
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            color: Colors.white.withValues(alpha: 0.85),
+                          ),
+                      textAlign: TextAlign.center,
+                    ),
                   ),
+                  if (_showDiagnostics) ...[
+                    const SizedBox(height: AppSpacing.sm),
+                    _DiagnosticsPanel(lines: _diagnosticLines()),
+                  ],
                   if (_lastError != null) ...[
                     const SizedBox(height: AppSpacing.sm),
                     SizedBox(
@@ -746,6 +843,41 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DiagnosticsPanel extends StatelessWidget {
+  const _DiagnosticsPanel({required this.lines});
+
+  final List<String> lines;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.75),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white24),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final line in lines)
+            Text(
+              line,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                height: 1.5,
+                fontFamily: 'monospace',
+              ),
+            ),
         ],
       ),
     );
