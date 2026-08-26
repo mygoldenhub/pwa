@@ -15,7 +15,7 @@ class WebBarcodePoller {
     required void Function(String value) onCode,
     Size? previewSize,
     Rect? cropInPreview,
-    Duration interval = const Duration(milliseconds: 150),
+    Duration interval = const Duration(milliseconds: 120),
   }) {}
 
   void stop() {}

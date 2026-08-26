@@ -25,7 +25,10 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     facing: CameraFacing.back,
     // Pause between engine reports so aiming does not fire accidental scans.
     detectionSpeed: DetectionSpeed.normal,
-    detectionTimeoutMs: 250,
+    // On web this doubles as the decode interval. The plugin decodes the whole
+    // frame there, which is the expensive path, so it runs slower than the
+    // cropped poller below that does most of the work.
+    detectionTimeoutMs: kIsWeb ? 350 : 200,
     // 1D product barcodes only — QR / Data Matrix / PDF417 are ignored.
     formats: const [
       BarcodeFormat.ean13,
@@ -61,13 +64,14 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
 
   static const Duration _focusWarmup = Duration(milliseconds: 200);
 
-  bool _webPollerStartRequested = false;
-
   bool _readyToScan = false;
   Timer? _warmupTimer;
 
   bool _torchOn = false;
   bool _torchBusy = false;
+
+  /// True when the web plugin reports mirrored barcode corners.
+  bool _webCornersMirrored = false;
 
   Rect _guideRectFor(Size size) {
     // EAN-13 is wide and short — keep a wide horizontal capture band.
@@ -80,34 +84,43 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     );
   }
 
-  Rect _decodeGuideRect(Size size) => _guideRectFor(size).inflate(8);
+  /// The region that is actually decoded.
+  ///
+  /// Deliberately larger than the white frame: a 1D code needs its quiet zones
+  /// to decode, and a code that fills the frame has them right on (or just
+  /// past) the edge. It also keeps the engine from dropping a code whose
+  /// reported box pokes out of the frame.
+  Rect _decodeRectFor(Size size) {
+    final guide = _guideRectFor(size);
+    final expanded = Rect.fromCenter(
+      center: guide.center,
+      width: guide.width + size.width * 0.10,
+      height: guide.height + size.height * 0.22,
+    );
+    return expanded.intersect(Offset.zero & size);
+  }
 
   void _syncWebScanRegion([Size? previewSize]) {
     final size = previewSize ?? _previewSize;
     if (size == Size.zero) return;
-    final crop = _guideRectFor(size).inflate(8);
+    final crop = _decodeRectFor(size);
     _webPoller.setScanRegion(
       previewSize: size,
       cropInPreview: crop,
     );
-    unawaited(_ensureWebPollerStarted(size, crop));
+    _ensureWebPollerStarted(size, crop);
   }
 
-  Future<void> _ensureWebPollerStarted(Size size, Rect crop) async {
+  void _ensureWebPollerStarted(Size size, Rect crop) {
     if (!kIsWeb || !mounted || _didReturn) return;
-    if (_webPoller.isRunning || _webPollerStartRequested) return;
-    _webPollerStartRequested = true;
-    try {
-      if (!await _webPoller.isSupported) return;
-      if (!mounted || _didReturn || _webPoller.isRunning) return;
-      _webPoller.start(
-        onCode: (value) => _handleDecodedValue(value),
-        previewSize: size,
-        cropInPreview: crop,
-      );
-    } finally {
-      if (!_webPoller.isRunning) _webPollerStartRequested = false;
-    }
+    if (_webPoller.isRunning) return;
+    // Not gated on decoder support: zxing-wasm is fetched in the background by
+    // mobile_scanner, so the decoder can appear a second after the camera does.
+    _webPoller.start(
+      onCode: (value) => _handleDecodedValue(value),
+      previewSize: size,
+      cropInPreview: crop,
+    );
   }
 
   @override
@@ -227,7 +240,6 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
   Future<void> _shutdownCamera() {
     return _shutdownFuture ??= () async {
       _webPoller.stop();
-      _webPollerStartRequested = false;
       if (kIsWeb && _torchOn) {
         try {
           await setWebTorch(false);
@@ -311,7 +323,11 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     var maxX = -double.infinity;
     var maxY = -double.infinity;
     for (final p in barcode.corners) {
-      final x = p.dx * scale + dx;
+      // The web plugin mirrors corners for front / desktop cameras, but the
+      // preview itself is un-mirrored by applyWebVideoPreviewStyle, so the
+      // corners have to be flipped back to line up with what is on screen.
+      final px = _webCornersMirrored ? captureSize.width - p.dx : p.dx;
+      final x = px * scale + dx;
       final y = p.dy * scale + dy;
       if (x < minX) minX = x;
       if (y < minY) minY = y;
@@ -324,13 +340,17 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
 
   bool _barcodeIsInGuide(Rect? mapped, Rect guideRect) {
     if (mapped == null) return false;
-    // Require the decoded box to sit mostly inside the white frame.
+    // Aiming, not framing: the code counts as scanned when it is centred on the
+    // frame. Requiring the whole reported box to sit inside rejects codes that
+    // are held close, or slightly tilted, even though they are clearly aimed.
+    if (guideRect.contains(mapped.center)) return true;
+
     final overlap = mapped.intersect(guideRect);
     if (overlap.isEmpty) return false;
     final overlapArea = overlap.width * overlap.height;
     final barcodeArea = mapped.width * mapped.height;
     if (barcodeArea <= 0) return false;
-    return overlapArea >= barcodeArea * 0.55;
+    return overlapArea >= barcodeArea * 0.35;
   }
 
   void _armScanWarmup() {
@@ -366,7 +386,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
   void _handleDecodedValue(String raw, {Rect? mapped}) {
     if (_didReturn || !_readyToScan) return;
     if (_looksLikeQrPayload(raw)) return;
-    final value = BarcodeNormalize.primary(raw) ?? raw.trim();
+    final value = _lookupValueFor(raw);
     if (value.isEmpty) return;
 
     // Lock immediately so a quick move cannot freeze the overlay without
@@ -379,6 +399,17 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     });
     debugPrint('Barcode accepted in frame: $raw -> $value');
     _openBarcodeResult(value);
+  }
+
+  /// GTIN normalization only applies to numeric / GS1 codes. Running it on an
+  /// alphanumeric Code 128 would strip the letters and look up the wrong item.
+  String _lookupValueFor(String raw) {
+    final text = raw.trim();
+    final isGs1 = RegExp(r'\(\s*01\s*\)').hasMatch(text) ||
+        RegExp(r'^01\d{14}').hasMatch(text);
+    final isNumeric = BarcodeNormalize.digitsOnly(text).length == text.length;
+    if (!isGs1 && !isNumeric) return text;
+    return BarcodeNormalize.primary(text) ?? text;
   }
 
   bool _looksLikeQrPayload(String raw) {
@@ -417,7 +448,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     if (capture.barcodes.isEmpty) return;
     if (_previewSize == Size.zero) return;
 
-    final guideRect = _decodeGuideRect(_previewSize);
+    final guideRect = _guideRectFor(_previewSize);
 
     for (final barcode in capture.barcodes) {
       final raw = (barcode.rawValue ?? barcode.displayValue)?.trim();
@@ -470,6 +501,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
   void _syncWebPreviewCss() {
     if (!kIsWeb) return;
     applyWebVideoPreviewStyle();
+    _webCornersMirrored = webPreviewIsMirrored();
   }
 
   Future<void> _toggleTorch() async {
@@ -606,7 +638,10 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
                   fit: BoxFit.cover,
                   tapToFocus: !kIsWeb,
                   useAppLifecycleState: false,
-                  scanWindow: guideRect,
+                  // The engine drops any code whose box is not fully inside
+                  // this window, so it is the padded region, not the frame.
+                  // Aim is checked against the frame in _onDetect.
+                  scanWindow: _decodeRectFor(areaSize),
                   onDetect: _onDetect,
                   errorBuilder: (context, error) {
                     debugPrint('MobileScanner error: $error');

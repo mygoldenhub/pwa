@@ -5,7 +5,13 @@ import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 
-/// Extra live barcode polling for web, using the browser BarcodeDetector API.
+/// Extra live barcode polling for web.
+///
+/// mobile_scanner decodes the full camera frame, so a 1D code that only covers
+/// a small part of a 1080p frame ends up with bars that are 1-2 pixels wide and
+/// never decodes. This poller decodes only the framed region, scaled up, and
+/// uses whichever decoder the browser has (native BarcodeDetector, or the
+/// zxing-wasm module that mobile_scanner loads on browsers without it).
 class WebBarcodePoller {
   Timer? _timer;
   bool _busy = false;
@@ -15,10 +21,12 @@ class WebBarcodePoller {
 
   bool get isRunning => _timer != null;
 
-  Future<bool> get isSupported async {
-    final detector = globalContext.getProperty('BarcodeDetector'.toJS);
-    return detector != null;
-  }
+  /// Whether a decoder is available right now.
+  ///
+  /// zxing-wasm is loaded asynchronously by mobile_scanner, so this can flip to
+  /// true a moment after the camera starts. Callers should not use it to decide
+  /// whether to start polling.
+  Future<bool> get isSupported async => _CropDecoder.instance.hasBackend;
 
   void setScanRegion({
     required Size previewSize,
@@ -32,7 +40,7 @@ class WebBarcodePoller {
     required void Function(String value) onCode,
     Size? previewSize,
     Rect? cropInPreview,
-    Duration interval = const Duration(milliseconds: 150),
+    Duration interval = const Duration(milliseconds: 120),
   }) {
     stop();
     _onCode = onCode;
@@ -67,6 +75,365 @@ class WebBarcodePoller {
   }
 }
 
+Future<String?> detectFromActiveVideo({
+  Size previewSize = Size.zero,
+  Rect cropInPreview = Rect.zero,
+}) async {
+  // Never decode the full camera frame — wait until the white-rect crop is known.
+  if (cropInPreview.width <= 8 ||
+      cropInPreview.height <= 8 ||
+      previewSize.width <= 0 ||
+      previewSize.height <= 0) {
+    return null;
+  }
+
+  final decoder = _CropDecoder.instance;
+  if (!decoder.hasBackend) return null;
+
+  final video = _firstLiveVideo();
+  if (video == null) return null;
+
+  final vwRaw = video.getProperty('videoWidth'.toJS)?.dartify();
+  final vhRaw = video.getProperty('videoHeight'.toJS)?.dartify();
+  if (vwRaw is! num || vhRaw is! num || vwRaw < 8 || vhRaw < 8) return null;
+  final vw = vwRaw.toDouble();
+  final vh = vhRaw.toDouble();
+
+  final videoCrop = _previewRectToVideo(cropInPreview, previewSize, vw, vh);
+  if (videoCrop.width < 8 || videoCrop.height < 8) return null;
+
+  return decoder.decode(video: video, videoCrop: videoCrop);
+}
+
+/// BarcodeDetector format names for 1D retail / logistics codes.
+const List<String> _nativeLinearFormats = <String>[
+  'ean_13',
+  'ean_8',
+  'upc_a',
+  'upc_e',
+  'code_128',
+  'code_39',
+  'code_93',
+  'codabar',
+  'itf',
+];
+
+/// zxing-wasm 3.x format names for the same set of codes.
+const List<String> _zxingLinearFormats = <String>[
+  'EAN13',
+  'EAN8',
+  'UPCA',
+  'UPCE',
+  'ISBN',
+  'Code128',
+  'Code39',
+  'Code93',
+  'Codabar',
+  'ITF',
+  'ITF14',
+  'DataBar',
+  'DataBarExp',
+];
+
+/// Decodes the framed part of the live video, at more than one scale.
+class _CropDecoder {
+  _CropDecoder._();
+
+  static final _CropDecoder instance = _CropDecoder._();
+
+  /// Upper bound on the work done per tick, so the preview keeps up.
+  static const int _budgetMs = 130;
+
+  /// Enlarging the crop widens the bars, which is what lets both decoders read
+  /// codes that are small in the frame.
+  static const double _upscaleTargetWidth = 1400;
+
+  JSObject? _canvas;
+  JSObject? _context;
+  JSObject? _detector;
+  bool _detectorUnusable = false;
+  bool _zxingFormatsRejected = false;
+
+  JSAny? get _detectorCtor => globalContext.getProperty('BarcodeDetector'.toJS);
+
+  /// The `window.ZXingWASM` module, once mobile_scanner has loaded it.
+  JSObject? get _zxingModule {
+    final module = globalContext.getProperty('ZXingWASM'.toJS);
+    if (module == null) return null;
+    final object = module as JSObject;
+    return object.getProperty('readBarcodes'.toJS) == null ? null : object;
+  }
+
+  bool get hasBackend =>
+      (!_detectorUnusable && _detectorCtor != null) || _zxingModule != null;
+
+  Future<String?> decode({
+    required JSObject video,
+    required Rect videoCrop,
+  }) async {
+    final clock = Stopwatch()..start();
+
+    for (final scale in _scalesFor(videoCrop)) {
+      final drawn = _drawCrop(video, videoCrop, scale);
+      if (drawn == null) continue;
+
+      final native = await _detectNative(drawn);
+      if (native != null) return native;
+      if (clock.elapsedMilliseconds > _budgetMs) return null;
+
+      final zxing = await _detectZxing(drawn);
+      if (zxing != null) return zxing;
+      if (clock.elapsedMilliseconds > _budgetMs) return null;
+    }
+    return null;
+  }
+
+  /// Native size first (cheap, enough for a code held close), then enlarged.
+  List<double> _scalesFor(Rect videoCrop) {
+    final upscale =
+        (_upscaleTargetWidth / videoCrop.width).clamp(1.0, 3.0).toDouble();
+    if (upscale <= 1.05) return const <double>[1.0];
+    return <double>[1.0, upscale];
+  }
+
+  _DrawnCrop? _drawCrop(JSObject video, Rect videoCrop, double scale) {
+    try {
+      final canvas = _ensureCanvas();
+      final context = _context;
+      if (canvas == null || context == null) return null;
+
+      final sw = videoCrop.width;
+      final sh = videoCrop.height;
+      final dw = (sw * scale).round();
+      final dh = (sh * scale).round();
+      if (dw < 8 || dh < 8) return null;
+
+      canvas.setProperty('width'.toJS, dw.toJS);
+      canvas.setProperty('height'.toJS, dh.toJS);
+      context.setProperty('imageSmoothingEnabled'.toJS, true.toJS);
+      context.setProperty('imageSmoothingQuality'.toJS, 'high'.toJS);
+
+      context.callMethodVarArgs('drawImage'.toJS, <JSAny>[
+        video,
+        videoCrop.left.toJS,
+        videoCrop.top.toJS,
+        sw.toJS,
+        sh.toJS,
+        0.toJS,
+        0.toJS,
+        dw.toJS,
+        dh.toJS,
+      ]);
+
+      return _DrawnCrop(canvas: canvas, width: dw, height: dh);
+    } catch (e) {
+      debugPrint('Barcode crop failed: $e');
+      return null;
+    }
+  }
+
+  JSObject? _ensureCanvas() {
+    final existing = _canvas;
+    if (existing != null) return existing;
+
+    final document = globalContext.getProperty('document'.toJS) as JSObject;
+    final canvas = document.callMethod('createElement'.toJS, 'canvas'.toJS);
+    if (canvas == null) return null;
+    final jsCanvas = canvas as JSObject;
+
+    // willReadFrequently keeps getImageData() on the CPU side, which zxing-wasm
+    // calls on every decode.
+    final attributes = JSObject()
+      ..setProperty('willReadFrequently'.toJS, true.toJS);
+    final context =
+        jsCanvas.callMethodVarArgs('getContext'.toJS, <JSAny>['2d'.toJS, attributes]);
+    if (context == null) return null;
+
+    _canvas = jsCanvas;
+    _context = context as JSObject;
+    return jsCanvas;
+  }
+
+  Future<String?> _detectNative(_DrawnCrop crop) async {
+    final detector = await _nativeDetector();
+    if (detector == null) return null;
+    try {
+      final detect = detector.getProperty('detect'.toJS);
+      if (detect == null) return null;
+      final result = (detect as JSFunction).callAsFunction(detector, crop.canvas);
+      if (result == null) return null;
+      final list = await (result as JSPromise).toDart;
+      return _firstLinearValue(list?.dartify(), rawKey: 'rawValue');
+    } catch (e) {
+      debugPrint('BarcodeDetector detect failed: $e');
+      return null;
+    }
+  }
+
+  Future<JSObject?> _nativeDetector() async {
+    if (_detector != null) return _detector;
+    if (_detectorUnusable) return null;
+
+    final ctor = _detectorCtor;
+    if (ctor == null) return null;
+
+    final formats = await _usableNativeFormats(ctor);
+    if (formats.isEmpty) {
+      // The browser has the API but cannot read any 1D format.
+      _detectorUnusable = true;
+      return null;
+    }
+
+    try {
+      final options = JSObject()
+        ..setProperty(
+          'formats'.toJS,
+          formats.map((f) => f.toJS).toList().toJS,
+        );
+      _detector = (ctor as JSFunction).callAsConstructor(options) as JSObject;
+    } catch (_) {
+      try {
+        _detector = (ctor as JSFunction).callAsConstructor() as JSObject;
+      } catch (e) {
+        _detectorUnusable = true;
+        debugPrint('BarcodeDetector unavailable: $e');
+      }
+    }
+    return _detector;
+  }
+
+  Future<List<String>> _usableNativeFormats(JSAny ctor) async {
+    try {
+      final getSupported =
+          (ctor as JSObject).getProperty('getSupportedFormats'.toJS);
+      if (getSupported == null) return _nativeLinearFormats;
+      final result = (getSupported as JSFunction).callAsFunction(ctor);
+      if (result == null) return _nativeLinearFormats;
+      final supported = (await (result as JSPromise).toDart)?.dartify();
+      if (supported is! List) return _nativeLinearFormats;
+      final available = supported.map((e) => '$e').toSet();
+      return _nativeLinearFormats.where(available.contains).toList();
+    } catch (_) {
+      return _nativeLinearFormats;
+    }
+  }
+
+  Future<String?> _detectZxing(_DrawnCrop crop) async {
+    final module = _zxingModule;
+    final context = _context;
+    if (module == null || context == null) return null;
+
+    try {
+      final imageData = context.callMethodVarArgs('getImageData'.toJS, <JSAny>[
+        0.toJS,
+        0.toJS,
+        crop.width.toJS,
+        crop.height.toJS,
+      ]);
+      if (imageData == null) return null;
+
+      final options = JSObject()
+        ..setProperty('tryHarder'.toJS, true.toJS)
+        ..setProperty('tryRotate'.toJS, true.toJS)
+        ..setProperty('tryInvert'.toJS, true.toJS)
+        ..setProperty('maxNumberOfSymbols'.toJS, 4.toJS);
+      if (!_zxingFormatsRejected) {
+        options.setProperty(
+          'formats'.toJS,
+          _zxingLinearFormats.map((f) => f.toJS).toList().toJS,
+        );
+      }
+
+      final readBarcodes = module.getProperty('readBarcodes'.toJS);
+      if (readBarcodes == null) return null;
+      final result = (readBarcodes as JSFunction)
+          .callAsFunction(module, imageData, options);
+      if (result == null) return null;
+
+      final list = await (result as JSPromise).toDart;
+      return _firstLinearValue(list?.dartify(), rawKey: 'text');
+    } catch (e) {
+      // An unknown format name makes zxing-wasm throw for every frame; retry
+      // without the filter from now on.
+      if (!_zxingFormatsRejected) {
+        _zxingFormatsRejected = true;
+        debugPrint('zxing-wasm format filter rejected, using all formats: $e');
+      } else {
+        debugPrint('zxing-wasm decode failed: $e');
+      }
+      return null;
+    }
+  }
+
+  String? _firstLinearValue(Object? results, {required String rawKey}) {
+    if (results is! List) return null;
+    for (final item in results) {
+      if (item is! Map) continue;
+      if (item['isValid'] == false) continue;
+      final raw = item[rawKey]?.toString().trim();
+      if (raw == null || raw.isEmpty) continue;
+      final format = item['format']?.toString() ?? '';
+      if (_isLinearFormat(format, raw)) return raw;
+    }
+    return null;
+  }
+}
+
+class _DrawnCrop {
+  const _DrawnCrop({
+    required this.canvas,
+    required this.width,
+    required this.height,
+  });
+
+  final JSObject canvas;
+  final int width;
+  final int height;
+}
+
+/// True for 1D product codes. Accepts both BarcodeDetector names (`ean_13`)
+/// and zxing-wasm names (`EAN13`).
+bool _isLinearFormat(String format, String raw) {
+  final name = format.toLowerCase().replaceAll(RegExp('[^a-z0-9]'), '');
+
+  const matrix = <String>[
+    'qr',
+    'aztec',
+    'pdf417',
+    'datamatrix',
+    'maxicode',
+  ];
+  for (final blocked in matrix) {
+    if (name.contains(blocked)) return false;
+  }
+
+  const linear = <String>[
+    'ean',
+    'upc',
+    'isbn',
+    'code128',
+    'code39',
+    'code93',
+    'code32',
+    'codabar',
+    'itf',
+    'databar',
+    'telepen',
+    'pzn',
+  ];
+  for (final allowed in linear) {
+    if (name.contains(allowed)) return true;
+  }
+
+  final digits = raw.replaceAll(RegExp(r'\D'), '');
+  return digits.isNotEmpty &&
+      digits.length == raw.length &&
+      (digits.length == 8 ||
+          digits.length == 12 ||
+          digits.length == 13 ||
+          digits.length == 14);
+}
+
 JSObject? _firstLiveVideo() {
   final document = globalContext.getProperty('document'.toJS) as JSObject;
   final videos = document.callMethod('querySelectorAll'.toJS, 'video'.toJS);
@@ -78,33 +445,11 @@ JSObject? _firstLiveVideo() {
     final video = list.callMethod('item'.toJS, i.toJS);
     if (video == null) continue;
     final jsVideo = video as JSObject;
+    if (jsVideo.getProperty('srcObject'.toJS) == null) continue;
     final ready = jsVideo.getProperty('readyState'.toJS)?.dartify();
     if (ready is num && ready >= 2) return jsVideo;
   }
   return null;
-}
-
-JSObject? _makeDetector(JSAny detectorCtor) {
-  final options = JSObject();
-  options.setProperty(
-    'formats'.toJS,
-    <JSAny>[
-      'ean_13'.toJS,
-      'ean_8'.toJS,
-      'upc_a'.toJS,
-      'upc_e'.toJS,
-      'code_128'.toJS,
-      'code_39'.toJS,
-      'codabar'.toJS,
-      'itf'.toJS,
-    ].toJS,
-  );
-  try {
-    return (detectorCtor as JSFunction).callAsConstructor(options) as JSObject;
-  } catch (e) {
-    debugPrint('BarcodeDetector constructor failed: $e');
-    return null;
-  }
 }
 
 /// Map a preview-space rect onto video pixels using BoxFit.cover.
@@ -123,130 +468,4 @@ Rect _previewRectToVideo(Rect crop, Size preview, double videoW, double videoH) 
   final right = ((crop.right - dx) / scale).clamp(0.0, videoW);
   final bottom = ((crop.bottom - dy) / scale).clamp(0.0, videoH);
   return Rect.fromLTRB(left, top, right, bottom);
-}
-
-JSObject? _cropVideoToCanvas(JSObject video, double videoW, double videoH, Rect videoCrop) {
-  try {
-    final document = globalContext.getProperty('document'.toJS) as JSObject;
-    final canvas = document.callMethod('createElement'.toJS, 'canvas'.toJS);
-    if (canvas == null) return null;
-    final jsCanvas = canvas as JSObject;
-
-    final sx = videoCrop.left.clamp(0.0, videoW - 1);
-    final sy = videoCrop.top.clamp(0.0, videoH - 1);
-    final sw = videoCrop.width.clamp(8.0, videoW - sx);
-    final sh = videoCrop.height.clamp(8.0, videoH - sy);
-
-    jsCanvas.setProperty('width'.toJS, sw.round().toJS);
-    jsCanvas.setProperty('height'.toJS, sh.round().toJS);
-
-    final ctx = jsCanvas.callMethod('getContext'.toJS, '2d'.toJS);
-    if (ctx == null) return null;
-    (ctx as JSObject).callMethodVarArgs(
-      'drawImage'.toJS,
-      [
-        video,
-        sx.toJS,
-        sy.toJS,
-        sw.toJS,
-        sh.toJS,
-        0.toJS,
-        0.toJS,
-        sw.toJS,
-        sh.toJS,
-      ],
-    );
-    return jsCanvas;
-  } catch (e) {
-    debugPrint('Video crop failed: $e');
-    return null;
-  }
-}
-
-Future<String?> detectFromActiveVideo({
-  Size previewSize = Size.zero,
-  Rect cropInPreview = Rect.zero,
-}) async {
-  // Never decode the full camera frame — wait until the white-rect crop is known.
-  if (cropInPreview.width <= 8 ||
-      cropInPreview.height <= 8 ||
-      previewSize.width <= 0 ||
-      previewSize.height <= 0) {
-    return null;
-  }
-
-  final detectorCtor = globalContext.getProperty('BarcodeDetector'.toJS);
-  if (detectorCtor == null) return null;
-
-  final video = _firstLiveVideo();
-  if (video == null) return null;
-
-  final vwRaw = video.getProperty('videoWidth'.toJS)?.dartify();
-  final vhRaw = video.getProperty('videoHeight'.toJS)?.dartify();
-  if (vwRaw is! num || vhRaw is! num || vwRaw < 8 || vhRaw < 8) return null;
-  final vw = vwRaw.toDouble();
-  final vh = vhRaw.toDouble();
-
-  final detector = _makeDetector(detectorCtor);
-  if (detector == null) return null;
-
-  final detectFn = detector.getProperty('detect'.toJS);
-  if (detectFn == null) return null;
-
-  final videoCrop = _previewRectToVideo(cropInPreview, previewSize, vw, vh);
-  if (videoCrop.width < 8 || videoCrop.height < 8) return null;
-
-  final cropped = _cropVideoToCanvas(video, vw, vh, videoCrop);
-  if (cropped == null) return null;
-  final JSAny source = cropped;
-
-  final result = (detectFn as JSFunction).callAsFunction(detector, source);
-  if (result == null) return null;
-
-  final list = await (result as JSPromise).toDart;
-  if (list == null) return null;
-
-  final dartList = list.dartify();
-  if (dartList is! List || dartList.isEmpty) return null;
-
-  String? linearRaw;
-
-  for (final item in dartList) {
-    if (item is! Map) continue;
-    final raw = item['rawValue']?.toString().trim();
-    if (raw == null || raw.isEmpty) continue;
-    final format = item['format']?.toString().toLowerCase() ?? '';
-    if (_webFormatIsLinear(format, raw)) {
-      linearRaw ??= raw;
-    }
-  }
-
-  return linearRaw;
-}
-
-bool _webFormatIsLinear(String format, String raw) {
-  if (format.contains('qr') ||
-      format.contains('aztec') ||
-      format.contains('pdf417') ||
-      format.contains('data_matrix') ||
-      format.contains('datamatrix')) {
-    return false;
-  }
-  if (format.contains('ean') ||
-      format.contains('upc') ||
-      format.contains('code_128') ||
-      format.contains('code_39') ||
-      format.contains('code_93') ||
-      format.contains('codabar') ||
-      format.contains('itf') ||
-      format.contains('databar')) {
-    return true;
-  }
-  final digits = raw.replaceAll(RegExp(r'\D'), '');
-  return digits.isNotEmpty &&
-      digits.length == raw.length &&
-      (digits.length == 8 ||
-          digits.length == 12 ||
-          digits.length == 13 ||
-          digits.length == 14);
 }
