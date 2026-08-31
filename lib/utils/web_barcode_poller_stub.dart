@@ -12,6 +12,8 @@ class WebBarcodePoller {
 
   WebScanDiagnostics get diagnostics => const WebScanDiagnostics.unavailable();
 
+  void setFocusSampleInPreview(Offset previewPoint) {}
+
   void setScanRegion({
     required Size previewSize,
     required Rect cropInPreview,

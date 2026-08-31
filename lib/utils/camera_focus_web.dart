@@ -185,6 +185,17 @@ bool _torchSupported(Map<Object?, Object?>? caps) {
   return false;
 }
 
+bool _zoomSupported(Map<Object?, Object?>? caps) {
+  if (caps == null) return false;
+  final zoom = caps['zoom'];
+  if (zoom is Map) {
+    final min = zoom['min'];
+    final max = zoom['max'];
+    return min is num && max is num && max > min;
+  }
+  return caps.containsKey('zoom');
+}
+
 String? _facingModeOf(JSObject track) {
   try {
     final settings = track.callMethod('getSettings'.toJS);
@@ -219,18 +230,21 @@ WebCameraCapabilities probeWebCameraCapabilities() {
   var supportsFocus = false;
   var supportsTorch = false;
   var supportsFocusDistance = false;
+  var supportsZoom = false;
 
   for (final track in tracks) {
     final caps = _capabilitiesOf(track);
     if (_focusSupported(caps)) supportsFocus = true;
     if (_torchSupported(caps)) supportsTorch = true;
     if (_focusRange(caps) != null) supportsFocusDistance = true;
+    if (_zoomSupported(caps)) supportsZoom = true;
   }
 
   return WebCameraCapabilities(
     supportsFocus: supportsFocus,
     supportsTorch: supportsTorch,
     supportsFocusDistance: supportsFocusDistance,
+    supportsZoom: supportsZoom,
   );
 }
 
@@ -335,6 +349,39 @@ Future<bool> setWebTorch(bool enabled) async {
 Future<bool> webTorchSupported() async {
   if (_isAppleMobileWeb()) return false;
   return probeWebCameraCapabilities().supportsTorch;
+}
+
+bool webZoomSupported() => probeWebCameraCapabilities().supportsZoom;
+
+double? webZoomLevel() {
+  for (final track in _liveVideoTracks()) {
+    if (_facingModeOf(track) == 'user') continue;
+    try {
+      final settings = track.callMethod('getSettings'.toJS)?.dartify();
+      if (settings is Map && settings['zoom'] is num) {
+        return (settings['zoom'] as num).toDouble();
+      }
+    } catch (_) {}
+  }
+  return null;
+}
+
+/// Apply digital zoom when the barcode is too small in the frame.
+Future<bool> setWebZoom(double level) async {
+  var changed = false;
+  for (final track in _focusableTracks()) {
+    final caps = _capabilitiesOf(track);
+    final zoom = caps?['zoom'];
+    if (zoom is! Map) continue;
+    final min = zoom['min'];
+    final max = zoom['max'];
+    if (min is! num || max is! num || max <= min) continue;
+    final value = level.clamp(min.toDouble(), max.toDouble());
+    var ok = await _applyAdvanced(track, {'zoom': value});
+    ok = ok || await _applyIdeal(track, {'zoom': value});
+    changed = changed || ok;
+  }
+  return changed;
 }
 
 /// True when mobile_scanner CSS-mirrors the preview (front / desktop cameras).

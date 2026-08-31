@@ -31,6 +31,12 @@ Future<bool> setWebTorch(bool enabled) => impl.setWebTorch(enabled);
 
 Future<bool> webTorchSupported() => impl.webTorchSupported();
 
+bool webZoomSupported() => impl.webZoomSupported();
+
+double? webZoomLevel() => impl.webZoomLevel();
+
+Future<bool> setWebZoom(double level) => impl.setWebZoom(level);
+
 /// True when the web camera preview is CSS-mirrored (front / desktop cameras).
 bool webPreviewIsMirrored() => impl.webPreviewIsMirrored();
 

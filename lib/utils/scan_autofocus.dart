@@ -4,6 +4,14 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:pwa/utils/camera_focus.dart';
 
+/// User-facing focus guidance shown below the camera preview.
+enum ScanFocusHint {
+  ready,
+  searching,
+  moveCloser,
+  tapToRefocus,
+}
+
 /// Keeps the web camera focused on the framed barcode.
 ///
 /// Browsers only expose "please autofocus", and a camera pointed at a barcode
@@ -17,6 +25,7 @@ class ScanAutoFocus {
     required this.focusScore,
     required this.pointOfInterest,
     this.onSearchingChanged,
+    this.onHintChanged,
   });
 
   /// Sharpness of the framed region, or null while it cannot be measured.
@@ -27,6 +36,8 @@ class ScanAutoFocus {
 
   /// Called when a focus sweep starts and ends, for the on-screen hint.
   final void Function(bool searching)? onSearchingChanged;
+
+  final void Function(ScanFocusHint hint)? onHintChanged;
 
   /// Above this the framed region is sharp enough to decode.
   static const double _sharpEnough = 14;
@@ -41,13 +52,21 @@ class ScanAutoFocus {
   bool _searching = false;
   bool _interrupted = false;
   double? _bestScore;
+  ScanFocusHint _hint = ScanFocusHint.ready;
+  int _softSweepCount = 0;
+  bool _zoomApplied = false;
 
   bool get isSearching => _searching;
+
+  ScanFocusHint get hint => _hint;
 
   void start() {
     if (!kIsWeb || _running) return;
     _running = true;
     _bestScore = null;
+    _softSweepCount = 0;
+    _zoomApplied = false;
+    _setHint(ScanFocusHint.ready);
     unawaited(_run());
   }
 
@@ -55,6 +74,7 @@ class ScanAutoFocus {
     _running = false;
     _interrupted = true;
     _setSearching(false);
+    _setHint(ScanFocusHint.ready);
   }
 
   /// Refocus on a point the user tapped, and let the camera take over again.
@@ -62,6 +82,8 @@ class ScanAutoFocus {
     if (!kIsWeb) return;
     _interrupted = true;
     _bestScore = null;
+    _softSweepCount = 0;
+    _setHint(ScanFocusHint.ready);
     await requestWebAutoFocus(point: normalizedPoint);
   }
 
@@ -71,6 +93,7 @@ class ScanAutoFocus {
 
     while (_running) {
       if (_isSharp()) {
+        _setHint(ScanFocusHint.ready);
         await Future<void>.delayed(_recheck);
         continue;
       }
@@ -80,6 +103,7 @@ class ScanAutoFocus {
       // positions. Without either, re-arming autofocus is all that is left.
       if (range == null || focusScore() == null) {
         await requestWebAutoFocus(point: pointOfInterest());
+        _setHint(ScanFocusHint.tapToRefocus);
         await Future<void>.delayed(_retry);
         continue;
       }
@@ -107,6 +131,7 @@ class ScanAutoFocus {
 
     _interrupted = false;
     _setSearching(true);
+    _setHint(ScanFocusHint.searching);
 
     double? bestScore;
     double? bestPosition;
@@ -137,10 +162,46 @@ class ScanAutoFocus {
     _setSearching(false);
     if (_interrupted || !_running) return;
 
-    if (bestPosition != null && bestScore != null && bestScore > 0) {
+    if (bestPosition != null &&
+        bestScore != null &&
+        bestScore >= _sharpEnough) {
+      // Only lock manual focus when the sweep actually found a sharp frame.
       await setWebFocusDistance(bestPosition);
       _bestScore = bestScore;
+      _setHint(ScanFocusHint.ready);
     } else {
+      // A failed sweep leaves the lens in a random position — hand control
+      // back to continuous AF instead of parking on a blurry distance.
+      await requestWebAutoFocus(point: pointOfInterest());
+      _softSweepCount++;
+      await _maybeZoomForSoftFrame();
+      if (bestScore != null && bestScore < _sharpEnough * 0.6) {
+        _setHint(ScanFocusHint.moveCloser);
+      } else {
+        _setHint(ScanFocusHint.tapToRefocus);
+      }
+    }
+  }
+
+  /// When the code stays soft after repeated sweeps, nudge digital zoom so the
+  /// bars occupy more pixels — common when the barcode is small in the frame.
+  Future<void> _maybeZoomForSoftFrame() async {
+    if (_zoomApplied || _softSweepCount < 2) return;
+    if (!webZoomSupported()) return;
+
+    final current = webZoomLevel();
+    if (current == null) return;
+
+    final caps = probeWebCameraCapabilities();
+    if (!caps.supportsZoom) return;
+
+    final next = (current + 0.35).clamp(1.0, 3.0);
+    if (next <= current + 0.05) return;
+
+    if (await setWebZoom(next)) {
+      _zoomApplied = true;
+      _bestScore = null;
+      _setHint(ScanFocusHint.moveCloser);
       await requestWebAutoFocus(point: pointOfInterest());
     }
   }
@@ -149,5 +210,14 @@ class ScanAutoFocus {
     if (_searching == value) return;
     _searching = value;
     onSearchingChanged?.call(value);
+    if (value) {
+      _setHint(ScanFocusHint.searching);
+    }
+  }
+
+  void _setHint(ScanFocusHint value) {
+    if (_hint == value) return;
+    _hint = value;
+    onHintChanged?.call(value);
   }
 }

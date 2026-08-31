@@ -81,8 +81,13 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
       if (!mounted) return;
       setState(() => _focusSearching = searching);
     },
+    onHintChanged: (hint) {
+      if (!mounted) return;
+      setState(() => _focusHint = hint);
+    },
   );
   bool _focusSearching = false;
+  ScanFocusHint _focusHint = ScanFocusHint.ready;
 
   /// Long press the hint to see what the scanner is actually doing. Remote
   /// "it doesn't scan" reports are otherwise unfalsifiable.
@@ -166,7 +171,23 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
 
   void _focusAtPreviewPoint(Offset previewPoint) {
     if (!kIsWeb) return;
+    _webPoller.setFocusSampleInPreview(previewPoint);
     unawaited(_autoFocus.refocusAt(_normalizedCameraPoint(previewPoint)));
+  }
+
+  String _scanHintText() {
+    switch (_focusHint) {
+      case ScanFocusHint.searching:
+        return 'Focusing on the barcode — hold still';
+      case ScanFocusHint.moveCloser:
+        return 'Move closer so the barcode fills more of the frame';
+      case ScanFocusHint.tapToRefocus:
+        return 'Tap directly on the barcode to refocus';
+      case ScanFocusHint.ready:
+        return kIsWeb
+            ? 'Hold the barcode steady inside the white frame. Tap to refocus.'
+            : 'Hold the barcode steady inside the white frame';
+    }
   }
 
   void _syncWebScanRegion([Size? previewSize]) {
@@ -812,11 +833,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
                   GestureDetector(
                     onLongPress: _toggleDiagnostics,
                     child: Text(
-                      _focusSearching
-                          ? 'Focusing on the barcode — hold still'
-                          : kIsWeb
-                              ? 'Hold the barcode steady inside the white frame. Tap to refocus.'
-                              : 'Hold the barcode steady inside the white frame',
+                      _scanHintText(),
                       style: Theme.of(context).textTheme.labelMedium?.copyWith(
                             color: Colors.white.withValues(alpha: 0.85),
                           ),

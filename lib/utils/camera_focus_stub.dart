@@ -20,6 +20,12 @@ Future<bool> setWebTorch(bool enabled) async => false;
 
 Future<bool> webTorchSupported() async => false;
 
+bool webZoomSupported() => false;
+
+double? webZoomLevel() => null;
+
+Future<bool> setWebZoom(double level) async => false;
+
 bool webPreviewIsMirrored() => false;
 
 bool webIsAppleMobile() => false;

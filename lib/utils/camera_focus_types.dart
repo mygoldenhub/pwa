@@ -4,12 +4,14 @@ class WebCameraCapabilities {
     required this.supportsFocus,
     required this.supportsTorch,
     this.supportsFocusDistance = false,
+    this.supportsZoom = false,
   });
 
   const WebCameraCapabilities.unsupported()
       : supportsFocus = false,
         supportsTorch = false,
-        supportsFocusDistance = false;
+        supportsFocusDistance = false,
+        supportsZoom = false;
 
   final bool supportsFocus;
   final bool supportsTorch;
@@ -17,6 +19,9 @@ class WebCameraCapabilities {
   /// Whether the lens can be driven to an explicit distance, which is what
   /// makes a focus sweep possible.
   final bool supportsFocusDistance;
+
+  /// Whether the camera exposes a digital zoom constraint.
+  final bool supportsZoom;
 
   bool get hasManualControls => supportsFocus;
 }

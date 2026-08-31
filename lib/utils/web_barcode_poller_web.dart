@@ -38,6 +38,21 @@ class WebBarcodePoller {
 
   WebScanDiagnostics get diagnostics => _CropDecoder.instance.diagnostics;
 
+  /// Aim sharpness measurement at a point inside the decode crop.
+  void setFocusSampleInPreview(Offset previewPoint) {
+    if (_cropInPreview.width <= 0 || _cropInPreview.height <= 0) return;
+    final local = Offset(
+      previewPoint.dx - _cropInPreview.left,
+      previewPoint.dy - _cropInPreview.top,
+    );
+    _CropDecoder.instance.setFocusSampleInCrop(
+      Offset(
+        (local.dx / _cropInPreview.width).clamp(0.0, 1.0),
+        (local.dy / _cropInPreview.height).clamp(0.0, 1.0),
+      ),
+    );
+  }
+
   void setScanRegion({
     required Size previewSize,
     required Rect cropInPreview,
@@ -156,11 +171,11 @@ class _CropDecoder {
   static final _CropDecoder instance = _CropDecoder._();
 
   /// Upper bound on the work done per tick, so the preview keeps up.
-  static const int _budgetMs = 130;
+  static const int _budgetMs = 180;
 
   /// Enlarging the crop widens the bars, which is what lets both decoders read
   /// codes that are small in the frame.
-  static const double _upscaleTargetWidth = 1400;
+  static const double _upscaleTargetWidth = 1800;
 
   /// How long the native detector gets on its own before zxing-wasm is fetched
   /// as a second opinion — about five seconds of polling without a single
@@ -180,6 +195,10 @@ class _CropDecoder {
   bool _zxingFormatsRejected = false;
   bool _zxingRequested = false;
   double? _focusScore;
+
+  /// Normalized 0..1 within the crop; when set, sharpness is measured here
+  /// instead of the center (barcodes are often off-center in the white frame).
+  Offset? _focusSampleInCrop;
 
   int _attempts = 0;
   int _decodes = 0;
@@ -250,7 +269,15 @@ class _CropDecoder {
     _decodes = 0;
     _nativeAttempts = 0;
     _focusScore = null;
+    _focusSampleInCrop = null;
     _lastError = null;
+  }
+
+  void setFocusSampleInCrop(Offset normalizedInCrop) {
+    _focusSampleInCrop = Offset(
+      normalizedInCrop.dx.clamp(0.0, 1.0),
+      normalizedInCrop.dy.clamp(0.0, 1.0),
+    );
   }
 
   void _loadZxing() {
@@ -337,9 +364,11 @@ class _CropDecoder {
   /// Native size first (cheap, enough for a code held close), then enlarged.
   List<double> _scalesFor(Rect videoCrop) {
     final upscale =
-        (_upscaleTargetWidth / videoCrop.width).clamp(1.0, 3.0).toDouble();
+        (_upscaleTargetWidth / videoCrop.width).clamp(1.0, 4.0).toDouble();
     if (upscale <= 1.05) return const <double>[1.0];
-    return <double>[1.0, upscale];
+    if (upscale <= 2.0) return <double>[1.0, upscale];
+    // Very small codes need an intermediate scale before the full upscale.
+    return <double>[1.0, upscale * 0.65, upscale];
   }
 
   _DrawnCrop? _drawCrop(JSObject video, Rect videoCrop, double scale) {
@@ -378,19 +407,42 @@ class _CropDecoder {
     }
   }
 
-  /// Mean absolute horizontal gradient over the middle of the crop.
+  /// Mean absolute horizontal gradient in a patch of the crop.
   ///
   /// Bars are vertical, so a horizontal gradient is exactly what goes away when
-  /// the lens is focused past them.
+  /// the lens is focused past them. When no tap point is set, several patches
+  /// are sampled and the sharpest wins — barcodes are rarely centered.
   double? _measureSharpness(_DrawnCrop crop) {
+    final sample = _focusSampleInCrop;
+    if (sample != null) return _sharpnessAt(crop, sample.dx, sample.dy);
+
+    const patches = <Offset>[
+      Offset(0.5, 0.5),
+      Offset(0.30, 0.30),
+      Offset(0.70, 0.30),
+      Offset(0.30, 0.70),
+      Offset(0.70, 0.70),
+    ];
+    double? best;
+    for (final patch in patches) {
+      final score = _sharpnessAt(crop, patch.dx, patch.dy);
+      if (score != null && (best == null || score > best)) best = score;
+    }
+    return best;
+  }
+
+  double? _sharpnessAt(_DrawnCrop crop, double nx, double ny) {
     final context = _context;
     if (context == null) return null;
 
-    final width = crop.width < 360 ? crop.width : 360;
-    final height = crop.height < 180 ? crop.height : 180;
-    if (width < 16 || height < 8) return null;
-    final left = ((crop.width - width) / 2).round();
-    final top = ((crop.height - height) / 2).round();
+    const patchW = 200;
+    const patchH = 100;
+    final width = patchW.clamp(16, crop.width);
+    final height = patchH.clamp(8, crop.height);
+    final cx = (nx * crop.width).round();
+    final cy = (ny * crop.height).round();
+    final left = (cx - width ~/ 2).clamp(0, crop.width - width);
+    final top = (cy - height ~/ 2).clamp(0, crop.height - height);
 
     try {
       final imageData = context.callMethodVarArgs('getImageData'.toJS, <JSAny>[
@@ -407,7 +459,6 @@ class _CropDecoder {
 
       var total = 0.0;
       var samples = 0;
-      // Every fourth row is plenty and keeps this off the frame budget.
       for (var row = 0; row < height; row += 4) {
         final rowStart = row * width * 4;
         for (var col = 1; col < width; col++) {
