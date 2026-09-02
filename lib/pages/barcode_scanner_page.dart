@@ -8,11 +8,14 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:pwa/components/app_header.dart';
 import 'package:pwa/nav.dart';
 import 'package:pwa/theme.dart';
+import 'package:pwa/utils/barcode_scan_decode.dart';
 import 'package:pwa/utils/barcode_validator.dart';
 import 'package:pwa/utils/camera_focus.dart';
 import 'package:pwa/utils/scan_voter.dart';
 import 'package:pwa/utils/web_barcode_poller.dart';
 
+/// Phone-first barcode scanner optimized for difficult product barcodes
+/// (glare, distance, tilt, haze, inverted print) on Android, iPhone, and web.
 class BarcodeScannerPage extends StatefulWidget {
   const BarcodeScannerPage({super.key});
 
@@ -22,27 +25,11 @@ class BarcodeScannerPage extends StatefulWidget {
 
 class _BarcodeScannerPageState extends State<BarcodeScannerPage>
     with WidgetsBindingObserver {
-  late final MobileScannerController _controller = MobileScannerController(
-    autoStart: false,
-    facing: CameraFacing.back,
-    detectionSpeed: DetectionSpeed.normal,
-    detectionTimeoutMs: kIsWeb ? 350 : 250,
-    formats: const [
-      BarcodeFormat.ean13,
-      BarcodeFormat.ean8,
-      BarcodeFormat.upcA,
-      BarcodeFormat.upcE,
-      BarcodeFormat.code128, // GS1-128
-    ],
-    cameraResolution: kIsWeb ? null : const Size(1920, 1080),
-    autoZoom: true,
-    returnImage: false,
-  );
-
   /// Serializes camera stop/start across page instances. The web plugin is a
   /// singleton — overlapping stop+start is why the camera only worked once.
   static Future<void> _cameraSession = Future<void>.value();
 
+  late MobileScannerController _controller;
   final ScanVoter _voter = ScanVoter();
   final WebBarcodePoller _webPoller = WebBarcodePoller();
 
@@ -51,25 +38,56 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
   MobileScannerException? _lastError;
   bool _torchBusy = false;
   bool _webTorchOn = false;
-  /// 1.0 or 2.0 — web cannot use [MobileScannerController.setZoomScale].
+  /// 1.0 / 2.0 / 3.0 — web uses CSS/hardware zoom; native uses setZoomScale.
   double _previewZoom = 1.0;
   bool _webHardwareZoom = false;
+  bool _invertImage = false;
+  int _controllerGeneration = 0;
 
   String? _statusValue;
   int _statusHits = 0;
   bool _barcodeFound = false;
   Timer? _statusIdleTimer;
+  Timer? _assistTimer;
+  DateTime _scanningSince = DateTime.now();
+  int _assistStep = 0;
   Size _previewSize = Size.zero;
+
+  static const _productFormats = <BarcodeFormat>[
+    BarcodeFormat.ean13,
+    BarcodeFormat.ean8,
+    BarcodeFormat.upcA,
+    BarcodeFormat.upcE,
+    BarcodeFormat.code128, // GS1-128
+  ];
+
+  MobileScannerController _buildController({required bool invertImage}) {
+    return MobileScannerController(
+      autoStart: false,
+      facing: CameraFacing.back,
+      detectionSpeed: DetectionSpeed.normal,
+      // Fast polling helps tilted / briefly-in-frame codes on phones.
+      detectionTimeoutMs: kIsWeb ? 300 : 180,
+      formats: _productFormats,
+      // High res on Android; web ignores this and uses the browser stream.
+      cameraResolution: kIsWeb ? null : const Size(1920, 1080),
+      autoZoom: !kIsWeb,
+      invertImage: invertImage && !kIsWeb,
+      returnImage: false,
+    );
+  }
 
   @override
   void initState() {
     super.initState();
+    _controller = _buildController(invertImage: false);
     if (kIsWeb) {
       MobileScannerPlatform.instance.setWebBarcodeReader(WebBarcodeReader.auto);
     }
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_ensureCameraStarted());
+      _armAssist();
     });
   }
 
@@ -81,6 +99,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
       case AppLifecycleState.resumed:
         _syncWebPreviewCss();
         unawaited(_ensureCameraStarted());
+        _armAssist();
       case AppLifecycleState.inactive:
         // Native: pause the camera when another UI covers the app.
         // Web: permission dialogs and tab focus fire inactive/paused and
@@ -94,6 +113,106 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
     }
   }
 
+  void _armAssist() {
+    _assistTimer?.cancel();
+    _scanningSince = DateTime.now();
+    _assistStep = 0;
+    // Every 3.5s nudge focus / zoom / invert if nothing was accepted yet.
+    _assistTimer = Timer.periodic(const Duration(milliseconds: 3500), (_) {
+      unawaited(_runAssistTick());
+    });
+  }
+
+  Future<void> _runAssistTick() async {
+    if (!mounted || _didReturn || _barcodeFound) return;
+    if (!_controller.value.isRunning) return;
+
+    _assistStep++;
+
+    // Nudge focus toward the center band (phones + web when supported).
+    try {
+      if (kIsWeb) {
+        await requestWebAutoFocus(point: const Offset(0.5, 0.45));
+      } else {
+        await _controller.setFocusPoint(const Offset(0.5, 0.45));
+      }
+    } catch (_) {}
+
+    // Step 1: auto 2x for distant barcodes if still reading nothing.
+    if (_assistStep == 1 && _previewZoom < 2.0 && _statusHits == 0) {
+      await _setZoom(2.0);
+      return;
+    }
+
+    // Step 2: try 3x if still cold.
+    if (_assistStep == 2 && _previewZoom < 3.0 && _statusHits == 0) {
+      await _setZoom(3.0);
+      return;
+    }
+
+    // Step 3+: alternate invert on Android for reflective / reverse-print codes.
+    if (!kIsWeb && _assistStep >= 3 && _statusHits == 0) {
+      await _toggleInvertMode();
+    }
+  }
+
+  Future<void> _toggleInvertMode() async {
+    if (kIsWeb || _didReturn || _barcodeFound) return;
+    final next = !_invertImage;
+    await _rebuildController(invertImage: next);
+  }
+
+  Future<void> _rebuildController({required bool invertImage}) async {
+    await _cameraSession;
+    if (!mounted || _didReturn) return;
+
+    _cameraSession = () async {
+      _webPoller.stop();
+      try {
+        await _controller.stop();
+      } catch (_) {}
+      await releaseWebCameraTracks();
+      _controller.dispose();
+      _invertImage = invertImage;
+      _controllerGeneration++;
+      _controller = _buildController(invertImage: invertImage);
+      if (mounted) setState(() {});
+      // Let MobileScanner attach to the new controller.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      if (!mounted || _didReturn) return;
+      await _startCameraInternal();
+    }();
+    await _cameraSession;
+  }
+
+  Future<CameraLensType?> _preferredLens() async {
+    if (kIsWeb) return null;
+    try {
+      return await MobileScannerPlatform.instance
+          .getBestCloseRangeScanningLens(facing: CameraFacing.back);
+    } catch (e) {
+      debugPrint('Close-range lens probe failed: $e');
+      return null;
+    }
+  }
+
+  Future<void> _startCameraInternal() async {
+    final lens = await _preferredLens();
+    if (!mounted || _didReturn) return;
+    await _controller.start(
+      cameraDirection: CameraFacing.back,
+      cameraLensType: lens,
+    );
+    _syncWebPreviewCss();
+    _syncWebPoller();
+    // Re-apply zoom after start (native zoom resets on restart).
+    if (!kIsWeb && _previewZoom > 1.0) {
+      try {
+        await _controller.setZoomScale(_nativeZoomScale(_previewZoom));
+      } catch (_) {}
+    }
+  }
+
   Future<void> _ensureCameraStarted() async {
     await _cameraSession;
     if (!mounted || _didReturn) return;
@@ -102,9 +221,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
     try {
       await releaseWebCameraTracks();
       if (!mounted || _didReturn) return;
-      await _controller.start();
-      _syncWebPreviewCss();
-      _syncWebPoller();
+      await _startCameraInternal();
       if (mounted && _lastError != null) {
         setState(() => _lastError = null);
       }
@@ -117,9 +234,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
       await Future<void>.delayed(const Duration(milliseconds: 150));
       if (!mounted || _didReturn) return;
       try {
-        await _controller.start();
-        _syncWebPreviewCss();
-        _syncWebPoller();
+        await _startCameraInternal();
         if (mounted && _lastError != null) {
           setState(() => _lastError = null);
         }
@@ -135,6 +250,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
 
   Future<void> _shutdownCamera() {
     return _shutdownFuture ??= () async {
+      _assistTimer?.cancel();
       _webPoller.stop();
       if (kIsWeb && _webTorchOn) {
         try {
@@ -163,20 +279,28 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
       _statusValue = null;
       _statusHits = 0;
       _barcodeFound = false;
+      _invertImage = false;
     });
     _statusIdleTimer?.cancel();
     _voter.reset();
     _shutdownFuture = null;
     _cameraSession = _shutdownCamera();
     await _cameraSession;
+    _controller.dispose();
+    _controllerGeneration++;
+    _controller = _buildController(invertImage: false);
     _shutdownFuture = null;
     _didReturn = false;
+    if (mounted) setState(() {});
+    await Future<void>.delayed(const Duration(milliseconds: 50));
     await _ensureCameraStarted();
+    _armAssist();
   }
 
   Future<void> _leaveScanner({required VoidCallback afterStop}) async {
     if (_didReturn) return;
     _didReturn = true;
+    _assistTimer?.cancel();
     _cameraSession = _shutdownCamera();
     await _cameraSession;
     if (!mounted) return;
@@ -205,9 +329,9 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
   void _onDetect(BarcodeCapture capture) {
     if (_didReturn) return;
     for (final barcode in capture.barcodes) {
-      final raw = (barcode.rawValue ?? barcode.displayValue)?.trim();
-      if (raw == null || raw.isEmpty) continue;
-      if (_considerDecoded(raw)) return;
+      for (final raw in BarcodeScanDecode.candidates(barcode)) {
+        if (_considerDecoded(raw)) return;
+      }
     }
   }
 
@@ -226,6 +350,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
         _statusHits = _voter.voteCount;
         _barcodeFound = true;
       });
+      _assistTimer?.cancel();
       _acceptBarcode(accepted);
       return true;
     }
@@ -249,9 +374,9 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
   /// Wide center band used only on web to upscale 1D bars. Not a UI frame.
   Rect _webDecodeRectFor(Size size) {
     return Rect.fromCenter(
-      center: size.center(Offset.zero),
-      width: (size.width * 0.92).clamp(1.0, size.width),
-      height: (size.height * 0.50).clamp(1.0, size.height),
+      center: Offset(size.width / 2, size.height * 0.45),
+      width: (size.width * 0.94).clamp(1.0, size.width),
+      height: (size.height * 0.42).clamp(1.0, size.height),
     );
   }
 
@@ -268,6 +393,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
       },
       previewSize: size,
       cropInPreview: crop,
+      interval: const Duration(milliseconds: 100),
     );
   }
 
@@ -299,7 +425,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
               const SnackBar(
                 behavior: SnackBarBehavior.floating,
                 content: Text(
-                  'Torch is not available in iPhone/iPad browsers. Use Chrome on Android, or the back camera.',
+                  'Torch is not available in iPhone/iPad browsers. Use Chrome on Android, or the iOS/Android app.',
                 ),
               ),
             );
@@ -355,8 +481,15 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
     }
   }
 
+  double _nativeZoomScale(double factor) {
+    // mobile_scanner zoomScale is 0..1. Map 1x→0, 2x→0.45, 3x→0.75.
+    if (factor <= 1.0) return 0.0;
+    if (factor <= 2.0) return 0.45;
+    return 0.75;
+  }
+
   Future<void> _setZoom(double factor) async {
-    final next = factor <= 1.0 ? 1.0 : 2.0;
+    final next = factor <= 1.0 ? 1.0 : (factor <= 2.0 ? 2.0 : 3.0);
     if (kIsWeb) {
       var hardware = false;
       try {
@@ -371,14 +504,15 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
       });
       _syncWebPreviewCss();
       // mobile_scanner rewrites <video> CSS after start; re-apply once the
-      // plugin has settled so 2x is not overwritten.
+      // plugin has settled so zoom is not overwritten.
       await Future<void>.delayed(const Duration(milliseconds: 50));
       if (mounted) _syncWebPreviewCss();
       return;
     }
 
     try {
-      await _controller.setZoomScale(next <= 1.0 ? 0.0 : 0.5);
+      await _controller.setZoomScale(_nativeZoomScale(next));
+      if (mounted) setState(() => _previewZoom = next);
     } catch (e) {
       debugPrint('Zoom failed: $e');
     }
@@ -388,6 +522,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _statusIdleTimer?.cancel();
+    _assistTimer?.cancel();
     _cameraSession = _shutdownCamera().whenComplete(() {
       _controller.dispose();
     });
@@ -400,6 +535,16 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
     if (!cameraRunning) return _ScanUiStatus.starting;
     if (_statusHits > 0 && _statusValue != null) return _ScanUiStatus.reading;
     return _ScanUiStatus.waiting;
+  }
+
+  String? get _assistHint {
+    if (_barcodeFound || _lastError != null) return null;
+    final elapsed = DateTime.now().difference(_scanningSince);
+    if (elapsed.inSeconds < 4) return null;
+    if (_invertImage) return 'Trying inverted image for glare / reverse print';
+    if (_previewZoom >= 3.0) return 'Hold steady · move closer if still blurry';
+    if (_previewZoom >= 2.0) return 'Zoomed in · use torch if there is glare';
+    return 'Tip: fill the center with the barcode, then hold steady';
   }
 
   @override
@@ -446,26 +591,42 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
                     }
                   });
                 }
-                return MobileScanner(
-                  controller: _controller,
-                  fit: BoxFit.cover,
-                  tapToFocus: !kIsWeb,
-                  useAppLifecycleState: false,
-                  onDetect: _onDetect,
-                  errorBuilder: (context, error) {
-                    debugPrint('MobileScanner error: $error');
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      if (!mounted) return;
-                      if (_lastError != error) {
-                        setState(() => _lastError = error);
-                      }
-                    });
-                    return _ScannerErrorState(
-                      error: error,
-                      onRetry: _restartScanner,
-                      onClose: _goToCart,
-                    );
-                  },
+                return Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    MobileScanner(
+                      key: ValueKey('scanner-$_controllerGeneration'),
+                      controller: _controller,
+                      fit: BoxFit.cover,
+                      tapToFocus: !kIsWeb,
+                      useAppLifecycleState: false,
+                      onDetect: _onDetect,
+                      errorBuilder: (context, error) {
+                        debugPrint('MobileScanner error: $error');
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (!mounted) return;
+                          if (_lastError != error) {
+                            setState(() => _lastError = error);
+                          }
+                        });
+                        return _ScannerErrorState(
+                          error: error,
+                          onRetry: _restartScanner,
+                          onClose: _goToCart,
+                        );
+                      },
+                    ),
+                    // Soft guide — does not crop the decoder, only helps aim.
+                    IgnorePointer(
+                      child: CustomPaint(
+                        painter: _ScanGuidePainter(
+                          accent: _barcodeFound
+                              ? const Color(0xFF7CFFB1)
+                              : Colors.white.withValues(alpha: 0.85),
+                        ),
+                      ),
+                    ),
+                  ],
                 );
               },
             ),
@@ -478,7 +639,9 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
                 value: _statusValue,
                 hits: _statusHits,
                 needed: _voter.requiredHits,
-                zoomed: kIsWeb ? _previewZoom > 1.0 : state.zoomScale >= 0.25,
+                hint: _assistHint,
+                inverted: _invertImage,
+                zoomFactor: _previewZoom,
                 onZoom: state.isRunning ? _setZoom : null,
               );
             },
@@ -507,13 +670,53 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
 
 enum _ScanUiStatus { starting, waiting, reading, found, error }
 
+class _ScanGuidePainter extends CustomPainter {
+  _ScanGuidePainter({required this.accent});
+
+  final Color accent;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final band = Rect.fromCenter(
+      center: Offset(size.width / 2, size.height * 0.45),
+      width: size.width * 0.78,
+      height: size.height * 0.18,
+    );
+    final paint = Paint()
+      ..color = accent
+      ..strokeWidth = 2.5
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    const corner = 22.0;
+    // Top-left
+    canvas.drawLine(band.topLeft, band.topLeft + const Offset(corner, 0), paint);
+    canvas.drawLine(band.topLeft, band.topLeft + const Offset(0, corner), paint);
+    // Top-right
+    canvas.drawLine(band.topRight, band.topRight + const Offset(-corner, 0), paint);
+    canvas.drawLine(band.topRight, band.topRight + const Offset(0, corner), paint);
+    // Bottom-left
+    canvas.drawLine(band.bottomLeft, band.bottomLeft + const Offset(corner, 0), paint);
+    canvas.drawLine(band.bottomLeft, band.bottomLeft + const Offset(0, -corner), paint);
+    // Bottom-right
+    canvas.drawLine(band.bottomRight, band.bottomRight + const Offset(-corner, 0), paint);
+    canvas.drawLine(band.bottomRight, band.bottomRight + const Offset(0, -corner), paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _ScanGuidePainter oldDelegate) =>
+      oldDelegate.accent != accent;
+}
+
 class _ScanStatusBar extends StatelessWidget {
   const _ScanStatusBar({
     required this.status,
     required this.value,
     required this.hits,
     required this.needed,
-    required this.zoomed,
+    required this.hint,
+    required this.inverted,
+    required this.zoomFactor,
     required this.onZoom,
   });
 
@@ -521,7 +724,9 @@ class _ScanStatusBar extends StatelessWidget {
   final String? value;
   final int hits;
   final int needed;
-  final bool zoomed;
+  final String? hint;
+  final bool inverted;
+  final double zoomFactor;
   final Future<void> Function(double factor)? onZoom;
 
   String get _title {
@@ -535,7 +740,7 @@ class _ScanStatusBar extends StatelessWidget {
       case _ScanUiStatus.error:
         return 'Camera unavailable';
       case _ScanUiStatus.waiting:
-        return 'Waiting for barcode';
+        return inverted ? 'Scanning (inverted)' : 'Waiting for barcode';
     }
   }
 
@@ -547,7 +752,7 @@ class _ScanStatusBar extends StatelessWidget {
       case _ScanUiStatus.found:
         return value;
       case _ScanUiStatus.waiting:
-        return 'Point the camera at a product barcode';
+        return hint ?? 'Point the camera at a product barcode';
       case _ScanUiStatus.starting:
       case _ScanUiStatus.error:
         return null;
@@ -611,7 +816,7 @@ class _ScanStatusBar extends StatelessWidget {
                     const SizedBox(height: 2),
                     Text(
                       subtitle,
-                      maxLines: 1,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                             color: Colors.white.withValues(alpha: 0.75),
@@ -624,7 +829,7 @@ class _ScanStatusBar extends StatelessWidget {
             ),
             if (onZoom != null) ...[
               const SizedBox(width: 8),
-              _ZoomToggle(zoomed: zoomed, onZoom: onZoom!),
+              _ZoomToggle(zoomFactor: zoomFactor, onZoom: onZoom!),
             ],
           ],
         ),
@@ -635,11 +840,11 @@ class _ScanStatusBar extends StatelessWidget {
 
 class _ZoomToggle extends StatelessWidget {
   const _ZoomToggle({
-    required this.zoomed,
+    required this.zoomFactor,
     required this.onZoom,
   });
 
-  final bool zoomed;
+  final double zoomFactor;
   final Future<void> Function(double factor) onZoom;
 
   @override
@@ -650,16 +855,9 @@ class _ZoomToggle extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _ZoomChip(
-            label: '1x',
-            selected: !zoomed,
-            onTap: () => onZoom(1.0),
-          ),
-          _ZoomChip(
-            label: '2x',
-            selected: zoomed,
-            onTap: () => onZoom(2.0),
-          ),
+          _ZoomChip(label: '1x', selected: zoomFactor <= 1.0, onTap: () => onZoom(1.0)),
+          _ZoomChip(label: '2x', selected: zoomFactor > 1.0 && zoomFactor < 2.5, onTap: () => onZoom(2.0)),
+          _ZoomChip(label: '3x', selected: zoomFactor >= 2.5, onTap: () => onZoom(3.0)),
         ],
       ),
     );
@@ -683,7 +881,7 @@ class _ZoomChip extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(20),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         child: Text(
           label,
           style: TextStyle(

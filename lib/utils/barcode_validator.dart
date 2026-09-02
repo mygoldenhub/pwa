@@ -13,6 +13,28 @@ class BarcodeValidator {
   );
   static final RegExp _aimPrefix = RegExp(r'^\][A-Za-z][0-9]');
   static final RegExp _nonDigits = RegExp(r'\D');
+  static final RegExp _gs1HumanAi01 = RegExp(
+    r'\(\s*01\s*\)\s*\d',
+    caseSensitive: false,
+  );
+  static final RegExp _fnc1Text = RegExp(r'\[FNC1\]', caseSensitive: false);
+  static final RegExp _gsText = RegExp(r'(\{GS\}|<GS>)', caseSensitive: false);
+
+  /// True when [raw] looks like a GS1-128 label carrying GTIN AI 01.
+  static bool looksLikeGs1(String raw) {
+    final text = _preprocessGs1(raw.trim());
+    if (text.isEmpty) return false;
+    if (_gs1HumanAi01.hasMatch(text)) return true;
+    if (_aimPrefix.hasMatch(text)) return true;
+    final digits = text.replaceAll(_nonDigits, '');
+    return digits.startsWith('01') && digits.length >= 16;
+  }
+
+  static String _preprocessGs1(String text) {
+    return text
+        .replaceAll(_fnc1Text, '\u001D')
+        .replaceAll(_gsText, '\u001D');
+  }
 
   /// Returns a normalized barcode, or `null` if [raw] is not a valid product
   /// code.
@@ -29,7 +51,7 @@ class BarcodeValidator {
   /// digits alone, so 8-digit values are left as-is after check-digit
   /// validation rather than expanded to UPC-A / EAN-13.
   static String? normalize(String raw) {
-    final text = raw.trim();
+    final text = _preprocessGs1(raw.trim());
     if (text.isEmpty) return null;
 
     final retail = _normalizeRetail(text);

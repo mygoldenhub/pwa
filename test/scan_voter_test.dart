@@ -10,14 +10,12 @@ void main() {
     voter = ScanVoter(clock: () => now);
   });
 
-  test('does not accept before 3 frames of the same value', () {
-    expect(voter.vote('9780201379624'), isNull);
+  test('does not accept before 2 frames of the same value', () {
     expect(voter.vote('9780201379624'), isNull);
     expect(voter.hasAccepted, isFalse);
   });
 
-  test('accepts after 3 consecutive frames of the same value', () {
-    expect(voter.vote('9780201379624'), isNull);
+  test('accepts after 2 consecutive frames of the same value', () {
     expect(voter.vote('9780201379624'), isNull);
     expect(voter.vote('9780201379624'), '9780201379624');
     expect(voter.hasAccepted, isTrue);
@@ -25,25 +23,20 @@ void main() {
 
   test('does not fire again after acceptance', () {
     voter.vote('9780201379624');
-    voter.vote('9780201379624');
     expect(voter.vote('9780201379624'), '9780201379624');
     expect(voter.vote('9780201379624'), isNull);
   });
 
   test('resets when a different value is seen', () {
     expect(voter.vote('9780201379624'), isNull);
-    expect(voter.vote('9780201379624'), isNull);
-    expect(voter.vote('0036000291452'), isNull);
     expect(voter.vote('0036000291452'), isNull);
     expect(voter.hasAccepted, isFalse);
     expect(voter.vote('0036000291452'), '0036000291452');
   });
 
-  test('resets after 1.5s with no detections', () {
+  test('resets after stale window with no detections', () {
     expect(voter.vote('9780201379624'), isNull);
-    expect(voter.vote('9780201379624'), isNull);
-    now = now.add(const Duration(milliseconds: 1500));
-    expect(voter.vote('9780201379624'), isNull);
+    now = now.add(const Duration(milliseconds: 1800));
     expect(voter.vote('9780201379624'), isNull);
     expect(voter.vote('9780201379624'), '9780201379624');
   });
@@ -51,10 +44,8 @@ void main() {
   test('reset() allows a new value to be accepted', () {
     voter.vote('9780201379624');
     voter.vote('9780201379624');
-    voter.vote('9780201379624');
     voter.reset();
     expect(voter.hasAccepted, isFalse);
-    expect(voter.vote('0036000291452'), isNull);
     expect(voter.vote('0036000291452'), isNull);
     expect(voter.vote('0036000291452'), '0036000291452');
   });

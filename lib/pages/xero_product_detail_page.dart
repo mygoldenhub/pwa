@@ -134,7 +134,7 @@ class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
               );
             }
 
-            final priceText = p.salePriceCents == null ? '—' : '\$${(p.salePriceCents! / 100).toStringAsFixed(2)}';
+            final priceText = p.salePriceCents == null ? '\u2014' : '\$${(p.salePriceCents! / 100).toStringAsFixed(2)}';
             return Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 720),
@@ -177,7 +177,7 @@ class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
                               ),
                               const SizedBox(height: AppSpacing.sm),
                               Text(
-                                p.code == null || p.code!.isEmpty ? 'SKU: —' : 'SKU: ${p.code}',
+                                p.code == null || p.code!.isEmpty ? 'SKU: \u2014' : 'SKU: ${p.code}',
                                 style: Theme.of(context).textTheme.titleLarge?.semiBold,
                               ),
                               if ((result?.barcode ?? '').isNotEmpty) ...[
@@ -247,7 +247,7 @@ class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
                                     await CartService.addOrIncrementXeroProduct(product: p, quantity: _quantity);
                                     if (!context.mounted) return;
                                     ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text('Added "${p.name}" × $_quantity')),
+                                      SnackBar(content: Text('Added "${p.name}" ├ù $_quantity')),
                                     );
                                     _close();
                                   } catch (e) {
@@ -316,7 +316,7 @@ class _LookupLoading extends StatelessWidget {
             ),
             const SizedBox(height: AppSpacing.lg),
             Text(
-              'Looking up product…',
+              'Looking up product...',
               style: Theme.of(context).textTheme.titleMedium?.semiBold,
               textAlign: TextAlign.center,
             ),

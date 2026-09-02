@@ -191,9 +191,6 @@ class _ProductsPageState extends State<ProductsPage> {
 
   Future<void> _openScanChooser() async {
     final cs = Theme.of(context).colorScheme;
-    // Use an explicitly dismissible dialog route so tapping outside the modal
-    // always closes it (especially on web where nested navigators can make
-    // dismissal feel inconsistent).
     final choice = await showGeneralDialog<_ScanChoice>(
       context: context,
       barrierDismissible: true,
@@ -201,9 +198,6 @@ class _ProductsPageState extends State<ProductsPage> {
       barrierColor: cs.scrim.withValues(alpha: 0.52),
       transitionDuration: const Duration(milliseconds: 180),
       pageBuilder: (context, animation, secondaryAnimation) {
-        // Some full-screen widgets (e.g. Center/Align) can swallow taps, making
-        // the framework barrier dismiss unreliable. We add an explicit
-        // tap-to-dismiss layer to guarantee the desired behavior.
         return Stack(
           children: [
             Positioned.fill(

@@ -10,9 +10,10 @@
 /// until [reset] is called.
 class ScanVoter {
   ScanVoter({
-    this.requiredHits = 3,
-    this.windowSize = 5,
-    this.staleAfter = const Duration(milliseconds: 1500),
+    /// Two agreeing check-digit-valid reads is enough; three slows hard scans.
+    this.requiredHits = 2,
+    this.windowSize = 4,
+    this.staleAfter = const Duration(milliseconds: 1800),
     DateTime Function()? clock,
   })  : assert(requiredHits > 0),
         assert(windowSize >= requiredHits),

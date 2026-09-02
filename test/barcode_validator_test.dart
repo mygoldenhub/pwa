@@ -64,6 +64,20 @@ void main() {
       );
     });
 
+    test('extracts GTIN when FNC1 is written as [FNC1] text', () {
+      expect(
+        BarcodeValidator.normalize('0109315021121728[FNC1]300012'),
+        '9315021121728',
+      );
+    });
+
+    test('extracts GTIN when GS is written as {GS} text', () {
+      expect(
+        BarcodeValidator.normalize('0109315021121728{GS}300012'),
+        '9315021121728',
+      );
+    });
+
     test('strips an AIM ]C1 prefix from GS1-128', () {
       expect(
         BarcodeValidator.normalize(']C10109315021121728300012'),

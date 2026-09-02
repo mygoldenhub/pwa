@@ -4,6 +4,7 @@ import 'dart:js_interop_unsafe';
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
+import 'package:pwa/utils/barcode_validator.dart';
 
 /// Extra live barcode polling for web.
 ///
@@ -235,7 +236,7 @@ class _CropDecoder {
       }
       if (clock.elapsedMilliseconds > _budgetMs) return null;
 
-      final zxing = await _detectZxing(drawn, invert: scale > 1.0);
+      final zxing = await _detectZxing(drawn, invert: true);
       if (zxing != null) {
         _decodes++;
         if (_nativeAvailable && ++_nativeMisses >= 2) {
@@ -246,6 +247,13 @@ class _CropDecoder {
         return zxing;
       }
       if (clock.elapsedMilliseconds > _budgetMs) return null;
+
+      // Second pass without invert in case tryInvert confused a clean code.
+      final zxingPlain = await _detectZxing(drawn, invert: false);
+      if (zxingPlain != null) {
+        _decodes++;
+        return zxingPlain;
+      }
     }
     return null;
   }
@@ -459,6 +467,8 @@ bool _isLinearFormat(String format, String raw) {
     if (name.contains(blocked)) return false;
   }
 
+  if (name.contains('gs1')) return true;
+
   const linear = <String>[
     'ean',
     'upc',
@@ -473,6 +483,8 @@ bool _isLinearFormat(String format, String raw) {
   for (final allowed in linear) {
     if (name.contains(allowed)) return true;
   }
+
+  if (BarcodeValidator.looksLikeGs1(raw)) return true;
 
   final digits = raw.replaceAll(RegExp(r'\D'), '');
   return digits.isNotEmpty &&

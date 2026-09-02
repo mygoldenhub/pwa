@@ -44,7 +44,7 @@ class ProductService extends ChangeNotifier {
         ..clear()
         ..addAll(parsed);
     } catch (e) {
-      // Cart / scan use xero_products. Missing public.products is expected.
+      // Cart uses xero_products. Missing public.products is expected.
       if (_looksLikeMissingTableError(e)) {
         _productsTableAvailable = false;
         _products.clear();
