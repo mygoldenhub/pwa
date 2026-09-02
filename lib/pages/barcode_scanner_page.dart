@@ -11,6 +11,7 @@ import 'package:pwa/theme.dart';
 import 'package:pwa/utils/barcode_validator.dart';
 import 'package:pwa/utils/camera_focus.dart';
 import 'package:pwa/utils/scan_voter.dart';
+import 'package:pwa/utils/web_barcode_poller.dart';
 
 class BarcodeScannerPage extends StatefulWidget {
   const BarcodeScannerPage({super.key});
@@ -25,7 +26,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
     autoStart: false,
     facing: CameraFacing.back,
     detectionSpeed: DetectionSpeed.normal,
-    detectionTimeoutMs: 250,
+    detectionTimeoutMs: kIsWeb ? 350 : 250,
     formats: const [
       BarcodeFormat.ean13,
       BarcodeFormat.ean8,
@@ -43,6 +44,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
   static Future<void> _cameraSession = Future<void>.value();
 
   final ScanVoter _voter = ScanVoter();
+  final WebBarcodePoller _webPoller = WebBarcodePoller();
 
   bool _didReturn = false;
   Future<void>? _shutdownFuture;
@@ -57,10 +59,14 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
   int _statusHits = 0;
   bool _barcodeFound = false;
   Timer? _statusIdleTimer;
+  Size _previewSize = Size.zero;
 
   @override
   void initState() {
     super.initState();
+    if (kIsWeb) {
+      MobileScannerPlatform.instance.setWebBarcodeReader(WebBarcodeReader.auto);
+    }
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_ensureCameraStarted());
@@ -98,6 +104,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
       if (!mounted || _didReturn) return;
       await _controller.start();
       _syncWebPreviewCss();
+      _syncWebPoller();
       if (mounted && _lastError != null) {
         setState(() => _lastError = null);
       }
@@ -112,6 +119,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
       try {
         await _controller.start();
         _syncWebPreviewCss();
+        _syncWebPoller();
         if (mounted && _lastError != null) {
           setState(() => _lastError = null);
         }
@@ -127,6 +135,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
 
   Future<void> _shutdownCamera() {
     return _shutdownFuture ??= () async {
+      _webPoller.stop();
       if (kIsWeb && _webTorchOn) {
         try {
           await setWebTorch(false);
@@ -195,42 +204,71 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
 
   void _onDetect(BarcodeCapture capture) {
     if (_didReturn) return;
-
     for (final barcode in capture.barcodes) {
       final raw = (barcode.rawValue ?? barcode.displayValue)?.trim();
       if (raw == null || raw.isEmpty) continue;
-
-      final value = BarcodeValidator.normalize(raw);
-      if (value == null) continue;
-
-      final accepted = _voter.vote(value);
-      _statusIdleTimer?.cancel();
-
-      if (accepted != null) {
-        setState(() {
-          _statusValue = accepted;
-          _statusHits = _voter.voteCount;
-          _barcodeFound = true;
-        });
-        _acceptBarcode(accepted);
-        return;
-      }
-
-      if (!mounted) return;
-      setState(() {
-        _statusValue = value;
-        _statusHits = _voter.voteCount;
-        _barcodeFound = false;
-      });
-      _statusIdleTimer = Timer(const Duration(milliseconds: 1500), () {
-        if (!mounted || _didReturn || _barcodeFound) return;
-        setState(() {
-          _statusValue = null;
-          _statusHits = 0;
-        });
-      });
-      return;
+      if (_considerDecoded(raw)) return;
     }
+  }
+
+  /// Returns true when the value was accepted and navigation started.
+  bool _considerDecoded(String raw) {
+    if (_didReturn) return false;
+    final value = BarcodeValidator.normalize(raw);
+    if (value == null) return false;
+
+    final accepted = _voter.vote(value);
+    _statusIdleTimer?.cancel();
+
+    if (accepted != null) {
+      setState(() {
+        _statusValue = accepted;
+        _statusHits = _voter.voteCount;
+        _barcodeFound = true;
+      });
+      _acceptBarcode(accepted);
+      return true;
+    }
+
+    if (!mounted) return false;
+    setState(() {
+      _statusValue = value;
+      _statusHits = _voter.voteCount;
+      _barcodeFound = false;
+    });
+    _statusIdleTimer = Timer(const Duration(milliseconds: 1500), () {
+      if (!mounted || _didReturn || _barcodeFound) return;
+      setState(() {
+        _statusValue = null;
+        _statusHits = 0;
+      });
+    });
+    return false;
+  }
+
+  /// Wide center band used only on web to upscale 1D bars. Not a UI frame.
+  Rect _webDecodeRectFor(Size size) {
+    return Rect.fromCenter(
+      center: size.center(Offset.zero),
+      width: (size.width * 0.92).clamp(1.0, size.width),
+      height: (size.height * 0.50).clamp(1.0, size.height),
+    );
+  }
+
+  void _syncWebPoller([Size? previewSize]) {
+    if (!kIsWeb || !mounted || _didReturn) return;
+    final size = previewSize ?? _previewSize;
+    if (size == Size.zero) return;
+    final crop = _webDecodeRectFor(size);
+    _webPoller.setScanRegion(previewSize: size, cropInPreview: crop);
+    if (_webPoller.isRunning) return;
+    _webPoller.start(
+      onCode: (value) {
+        _considerDecoded(value);
+      },
+      previewSize: size,
+      cropInPreview: crop,
+    );
   }
 
   void _syncWebPreviewCss() {
@@ -396,11 +434,19 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
       body: Column(
         children: [
           Expanded(
-            child: Stack(
-              fit: StackFit.expand,
-              clipBehavior: Clip.none,
-              children: [
-                MobileScanner(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final areaSize = constraints.biggest;
+                if (_previewSize != areaSize) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (!mounted) return;
+                    if (_previewSize != areaSize) {
+                      setState(() => _previewSize = areaSize);
+                      _syncWebPoller(areaSize);
+                    }
+                  });
+                }
+                return MobileScanner(
                   controller: _controller,
                   fit: BoxFit.cover,
                   tapToFocus: !kIsWeb,
@@ -420,26 +466,8 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
                       onClose: _goToCart,
                     );
                   },
-                ),
-                ValueListenableBuilder<MobileScannerState>(
-                  valueListenable: _controller,
-                  builder: (context, state, _) {
-                    if (!state.isRunning) return const SizedBox.shrink();
-                    return Align(
-                      alignment: Alignment.bottomRight,
-                      child: Padding(
-                        padding: const EdgeInsets.only(right: 16, bottom: 24),
-                        child: _ZoomToggle(
-                          zoomed: kIsWeb
-                              ? _previewZoom > 1.0
-                              : state.zoomScale >= 0.25,
-                          onZoom: _setZoom,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ],
+                );
+              },
             ),
           ),
           ValueListenableBuilder<MobileScannerState>(
@@ -450,6 +478,8 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
                 value: _statusValue,
                 hits: _statusHits,
                 needed: _voter.requiredHits,
+                zoomed: kIsWeb ? _previewZoom > 1.0 : state.zoomScale >= 0.25,
+                onZoom: state.isRunning ? _setZoom : null,
               );
             },
           ),
@@ -483,12 +513,16 @@ class _ScanStatusBar extends StatelessWidget {
     required this.value,
     required this.hits,
     required this.needed,
+    required this.zoomed,
+    required this.onZoom,
   });
 
   final _ScanUiStatus status;
   final String? value;
   final int hits;
   final int needed;
+  final bool zoomed;
+  final Future<void> Function(double factor)? onZoom;
 
   String get _title {
     switch (status) {
@@ -588,6 +622,10 @@ class _ScanStatusBar extends StatelessWidget {
                 ],
               ),
             ),
+            if (onZoom != null) ...[
+              const SizedBox(width: 8),
+              _ZoomToggle(zoomed: zoomed, onZoom: onZoom!),
+            ],
           ],
         ),
       ),
