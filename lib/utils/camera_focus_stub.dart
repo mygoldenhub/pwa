@@ -26,6 +26,8 @@ double? webZoomLevel() => null;
 
 Future<bool> setWebZoom(double level) async => false;
 
+Future<bool> setWebZoomMultiplier(double multiplier) async => false;
+
 bool webPreviewIsMirrored() => false;
 
 bool webIsAppleMobile() => false;
@@ -36,6 +38,6 @@ WebCameraCapabilities probeWebCameraCapabilities() {
 
 Future<void> releaseWebCameraTracks() async {}
 
-void applyWebVideoPreviewStyle() {}
+void applyWebVideoPreviewStyle({double? cssZoom}) {}
 
 void ensureWebVideoPlaysInline() {}

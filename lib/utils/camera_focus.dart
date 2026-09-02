@@ -37,6 +37,10 @@ double? webZoomLevel() => impl.webZoomLevel();
 
 Future<bool> setWebZoom(double level) => impl.setWebZoom(level);
 
+/// Zoom by 1x / 2x using the camera's zoom constraint when it exists.
+Future<bool> setWebZoomMultiplier(double multiplier) =>
+    impl.setWebZoomMultiplier(multiplier);
+
 /// True when the web camera preview is CSS-mirrored (front / desktop cameras).
 bool webPreviewIsMirrored() => impl.webPreviewIsMirrored();
 
@@ -50,7 +54,8 @@ Future<void> releaseWebCameraTracks() => impl.releaseWebCameraTracks();
 
 /// Un-mirror the live &lt;video&gt; with CSS.
 /// Flutter Transform/ClipRect freeze HtmlElementView in production CanvasKit.
-void applyWebVideoPreviewStyle() => impl.applyWebVideoPreviewStyle();
+void applyWebVideoPreviewStyle({double? cssZoom}) =>
+    impl.applyWebVideoPreviewStyle(cssZoom: cssZoom);
 
 /// Keep the preview playing inline, which iPhone browsers require explicitly.
 void ensureWebVideoPlaysInline() => impl.ensureWebVideoPlaysInline();

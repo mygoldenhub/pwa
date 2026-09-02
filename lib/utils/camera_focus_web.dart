@@ -433,7 +433,34 @@ void ensureWebVideoPlaysInline() {
   } catch (_) {}
 }
 
-void applyWebVideoPreviewStyle() {
+/// CSS digital zoom for browsers that cannot drive the camera zoom constraint.
+/// 1.0 is identity; 2.0 magnifies the center of the live preview.
+double _cssZoom = 1.0;
+
+/// Optical / digital zoom via MediaTrackConstraints when the camera exposes
+/// a `zoom` capability (Chrome on many Android phones). [multiplier] is 1.0
+/// for the widest view and 2.0 for 2x. Returns false when the track cannot
+/// be zoomed, so callers can fall back to CSS.
+Future<bool> setWebZoomMultiplier(double multiplier) async {
+  final factor = multiplier <= 1.0 ? 1.0 : 2.0;
+  var changed = false;
+  for (final track in _focusableTracks()) {
+    final caps = _capabilitiesOf(track);
+    final zoom = caps?['zoom'];
+    if (zoom is! Map) continue;
+    final min = zoom['min'];
+    final max = zoom['max'];
+    if (min is! num || max is! num || max <= min) continue;
+    final target = (min.toDouble() * factor).clamp(min.toDouble(), max.toDouble());
+    var ok = await _applyAdvanced(track, {'zoom': target});
+    ok = ok || await _applyIdeal(track, {'zoom': target});
+    changed = changed || ok;
+  }
+  return changed;
+}
+
+void applyWebVideoPreviewStyle({double? cssZoom}) {
+  if (cssZoom != null) _cssZoom = cssZoom <= 1.0 ? 1.0 : cssZoom;
   try {
     final videos = _document.callMethod('querySelectorAll'.toJS, 'video'.toJS);
     if (videos == null) return;
@@ -448,11 +475,25 @@ void applyWebVideoPreviewStyle() {
       final style = jsVideo.getProperty('style'.toJS);
       if (style == null) continue;
       final jsStyle = style as JSObject;
+      final scale = _cssZoom;
       // Replace plugin CSS (scaleX(-1)) so Flutter Transform is not needed.
-      jsStyle.setProperty('transform'.toJS, 'none'.toJS);
+      // CSS scale is the web 1x/2x control: MediaTrack zoom is unsupported
+      // on most laptop webcams.
+      jsStyle.setProperty(
+        'transform'.toJS,
+        (scale <= 1.0 ? 'none' : 'scale($scale)').toJS,
+      );
+      jsStyle.setProperty('transformOrigin'.toJS, 'center center'.toJS);
       jsStyle.setProperty('objectFit'.toJS, 'cover'.toJS);
       jsStyle.setProperty('width'.toJS, '100%'.toJS);
       jsStyle.setProperty('height'.toJS, '100%'.toJS);
+      final parent = jsVideo.getProperty('parentElement'.toJS);
+      if (parent != null) {
+        final parentStyle = (parent as JSObject).getProperty('style'.toJS);
+        if (parentStyle != null) {
+          (parentStyle as JSObject).setProperty('overflow'.toJS, 'hidden'.toJS);
+        }
+      }
     }
   } catch (_) {}
 }

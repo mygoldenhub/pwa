@@ -8,10 +8,9 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:pwa/components/app_header.dart';
 import 'package:pwa/nav.dart';
 import 'package:pwa/theme.dart';
-import 'package:pwa/utils/barcode_normalize.dart';
+import 'package:pwa/utils/barcode_validator.dart';
 import 'package:pwa/utils/camera_focus.dart';
-import 'package:pwa/utils/scan_autofocus.dart';
-import 'package:pwa/utils/web_barcode_poller.dart';
+import 'package:pwa/utils/scan_voter.dart';
 
 class BarcodeScannerPage extends StatefulWidget {
   const BarcodeScannerPage({super.key});
@@ -20,208 +19,48 @@ class BarcodeScannerPage extends StatefulWidget {
   State<BarcodeScannerPage> createState() => _BarcodeScannerPageState();
 }
 
-class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBindingObserver {
+class _BarcodeScannerPageState extends State<BarcodeScannerPage>
+    with WidgetsBindingObserver {
   late final MobileScannerController _controller = MobileScannerController(
     autoStart: false,
     facing: CameraFacing.back,
-    // Pause between engine reports so aiming does not fire accidental scans.
     detectionSpeed: DetectionSpeed.normal,
-    // On web this doubles as the decode interval. The plugin decodes the whole
-    // frame there, which is the expensive path, so it runs slower than the
-    // cropped poller below that does most of the work.
-    detectionTimeoutMs: kIsWeb ? 350 : 200,
-    // 1D product barcodes only — QR / Data Matrix / PDF417 are ignored.
+    detectionTimeoutMs: 250,
     formats: const [
       BarcodeFormat.ean13,
       BarcodeFormat.ean8,
       BarcodeFormat.upcA,
       BarcodeFormat.upcE,
-      BarcodeFormat.code128,
-      BarcodeFormat.code39,
-      BarcodeFormat.code93,
-      BarcodeFormat.codabar,
-      BarcodeFormat.itf14,
+      BarcodeFormat.code128, // GS1-128
     ],
     cameraResolution: kIsWeb ? null : const Size(1920, 1080),
+    autoZoom: true,
+    returnImage: false,
   );
-
-  final WebBarcodePoller _webPoller = WebBarcodePoller();
 
   /// Serializes camera stop/start across page instances. The web plugin is a
   /// singleton — overlapping stop+start is why the camera only worked once.
   static Future<void> _cameraSession = Future<void>.value();
 
+  final ScanVoter _voter = ScanVoter();
+
   bool _didReturn = false;
   Future<void>? _shutdownFuture;
   MobileScannerException? _lastError;
-  bool _webControlsProbed = false;
-  WebCameraCapabilities _webCaps = const WebCameraCapabilities.unsupported();
-
-  Size _previewSize = Size.zero;
-  Rect? _liveBarcodeRect;
-  String? _liveBarcodeValue;
-  Timer? _liveClearTimer;
-  bool _closeRangeLensApplied = false;
-
-  static const Duration _focusWarmup = Duration(milliseconds: 200);
-
-  bool _readyToScan = false;
-  Timer? _warmupTimer;
-
-  bool _torchOn = false;
   bool _torchBusy = false;
+  bool _webTorchOn = false;
+  /// 1.0 or 2.0 — web cannot use [MobileScannerController.setZoomScale].
+  double _previewZoom = 1.0;
+  bool _webHardwareZoom = false;
 
-  /// True when the web plugin reports mirrored barcode corners.
-  bool _webCornersMirrored = false;
-
-  late final ScanAutoFocus _autoFocus = ScanAutoFocus(
-    focusScore: () => _webPoller.focusScore,
-    pointOfInterest: _guideCenterInCamera,
-    onSearchingChanged: (searching) {
-      if (!mounted) return;
-      setState(() => _focusSearching = searching);
-    },
-    onHintChanged: (hint) {
-      if (!mounted) return;
-      setState(() => _focusHint = hint);
-    },
-  );
-  bool _focusSearching = false;
-  ScanFocusHint _focusHint = ScanFocusHint.ready;
-
-  /// Long press the hint to see what the scanner is actually doing. Remote
-  /// "it doesn't scan" reports are otherwise unfalsifiable.
-  bool _showDiagnostics = false;
-  Timer? _diagnosticsTimer;
-
-  void _toggleDiagnostics() {
-    setState(() => _showDiagnostics = !_showDiagnostics);
-    _diagnosticsTimer?.cancel();
-    if (!_showDiagnostics) return;
-    HapticFeedback.selectionClick();
-    _diagnosticsTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
-      if (!mounted || !_showDiagnostics) return;
-      setState(() {});
-    });
-  }
-
-  List<String> _diagnosticLines() {
-    final reader = kIsWeb ? MobileScannerPlatform.instance.activeWebReader : null;
-    return <String>[
-      ..._webPoller.diagnostics.lines,
-      'plugin reader: ${reader?.name ?? '-'}'
-          '   polling: ${_webPoller.isRunning}',
-      'preview: ${_previewSize.width.round()}x${_previewSize.height.round()}'
-          '   armed: $_readyToScan   mirrored: $_webCornersMirrored',
-      'focus: ${_webCaps.supportsFocus ? 'yes' : 'no'}'
-          '   lens control: ${_webCaps.supportsFocusDistance ? 'yes' : 'no'}'
-          '   searching: $_focusSearching',
-    ];
-  }
-
-  Rect _guideRectFor(Size size) {
-    // EAN-13 is wide and short — keep a wide horizontal capture band.
-    final width = (size.width * 0.88).clamp(260.0, 720.0);
-    final height = (size.height * 0.32).clamp(140.0, 280.0);
-    return Rect.fromCenter(
-      center: size.center(Offset.zero),
-      width: width,
-      height: height,
-    );
-  }
-
-  /// The region that is actually decoded.
-  ///
-  /// Deliberately larger than the white frame: a 1D code needs its quiet zones
-  /// to decode, and a code that fills the frame has them right on (or just
-  /// past) the edge. It also keeps the engine from dropping a code whose
-  /// reported box pokes out of the frame.
-  Rect _decodeRectFor(Size size) {
-    final guide = _guideRectFor(size);
-    final expanded = Rect.fromCenter(
-      center: guide.center,
-      width: guide.width + size.width * 0.10,
-      height: guide.height + size.height * 0.22,
-    );
-    return expanded.intersect(Offset.zero & size);
-  }
-
-  /// A preview point in camera space, normalized to 0..1, matching the
-  /// BoxFit.cover the preview is drawn with.
-  Offset _normalizedCameraPoint(Offset previewPoint) {
-    final capture = _controller.value.size;
-    if (capture.isEmpty || _previewSize.isEmpty) return const Offset(0.5, 0.5);
-
-    final scaleX = _previewSize.width / capture.width;
-    final scaleY = _previewSize.height / capture.height;
-    final scale = scaleX > scaleY ? scaleX : scaleY;
-    final dx = (_previewSize.width - capture.width * scale) / 2;
-    final dy = (_previewSize.height - capture.height * scale) / 2;
-
-    return Offset(
-      (((previewPoint.dx - dx) / scale) / capture.width).clamp(0.0, 1.0),
-      (((previewPoint.dy - dy) / scale) / capture.height).clamp(0.0, 1.0),
-    );
-  }
-
-  Offset _guideCenterInCamera() {
-    if (_previewSize == Size.zero) return const Offset(0.5, 0.5);
-    return _normalizedCameraPoint(_guideRectFor(_previewSize).center);
-  }
-
-  void _focusAtPreviewPoint(Offset previewPoint) {
-    if (!kIsWeb) return;
-    _webPoller.setFocusSampleInPreview(previewPoint);
-    unawaited(_autoFocus.refocusAt(_normalizedCameraPoint(previewPoint)));
-  }
-
-  String _scanHintText() {
-    switch (_focusHint) {
-      case ScanFocusHint.searching:
-        return 'Focusing on the barcode — hold still';
-      case ScanFocusHint.moveCloser:
-        return 'Move closer so the barcode fills more of the frame';
-      case ScanFocusHint.tapToRefocus:
-        return 'Tap directly on the barcode to refocus';
-      case ScanFocusHint.ready:
-        return kIsWeb
-            ? 'Hold the barcode steady inside the white frame. Tap to refocus.'
-            : 'Hold the barcode steady inside the white frame';
-    }
-  }
-
-  void _syncWebScanRegion([Size? previewSize]) {
-    final size = previewSize ?? _previewSize;
-    if (size == Size.zero) return;
-    final crop = _decodeRectFor(size);
-    _webPoller.setScanRegion(
-      previewSize: size,
-      cropInPreview: crop,
-    );
-    _ensureWebPollerStarted(size, crop);
-  }
-
-  void _ensureWebPollerStarted(Size size, Rect crop) {
-    if (!kIsWeb || !mounted || _didReturn) return;
-    if (_webPoller.isRunning) return;
-    // Not gated on decoder support: zxing-wasm is fetched in the background by
-    // mobile_scanner, so the decoder can appear a second after the camera does.
-    _webPoller.start(
-      onCode: (value) => _handleDecodedValue(value),
-      previewSize: size,
-      cropInPreview: crop,
-    );
-  }
+  String? _statusValue;
+  int _statusHits = 0;
+  bool _barcodeFound = false;
+  Timer? _statusIdleTimer;
 
   @override
   void initState() {
     super.initState();
-    // Prefer native BarcodeDetector on Chrome; fall back to zxing-wasm.
-    // ManyCam / on-screen EAN-13 often works better with the native detector.
-    if (kIsWeb) {
-      MobileScannerPlatform.instance.setWebBarcodeReader(WebBarcodeReader.auto);
-    }
-    _controller.addListener(_onControllerUpdate);
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_ensureCameraStarted());
@@ -231,65 +70,22 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (_didReturn) return;
+
     switch (state) {
       case AppLifecycleState.resumed:
-        // Mobile browsers pause the <video> element when the tab loses focus,
-        // and it stays paused: the stream is live but the frames are frozen.
         _syncWebPreviewCss();
         unawaited(_ensureCameraStarted());
-      case AppLifecycleState.hidden:
-      case AppLifecycleState.paused:
-        // Web: permission dialogs / tab focus fire paused and would kill
-        // getUserMedia, causing "Device in use" on the next start.
+      case AppLifecycleState.inactive:
+        // Native: pause the camera when another UI covers the app.
+        // Web: permission dialogs and tab focus fire inactive/paused and
+        // would kill getUserMedia, causing "Device in use" on the next start.
         if (kIsWeb) return;
         unawaited(_controller.stop());
-      default:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
         break;
     }
-  }
-
-  void _onControllerUpdate() {
-    final state = _controller.value;
-    if (!mounted) return;
-
-    if (state.isRunning && _lastError != null) {
-      setState(() => _lastError = null);
-    }
-
-    if (!kIsWeb) {
-      final on = state.torchState == TorchState.on;
-      if (on != _torchOn) setState(() => _torchOn = on);
-    }
-
-    if (kIsWeb && state.isRunning) {
-      _syncWebScanRegion();
-      if (!_webControlsProbed) {
-        _webControlsProbed = true;
-        unawaited(_probeWebControls());
-      }
-    }
-  }
-
-  Future<void> _probeWebControls() async {
-    await Future<void>.delayed(const Duration(milliseconds: 400));
-    if (!mounted) return;
-    var caps = await enableContinuousCameraFocus();
-    if (!mounted) return;
-
-    setState(() {
-      _webCaps = caps;
-    });
-    _syncWebPreviewCss();
-    _autoFocus.start();
-
-    // Capabilities (especially torch) can appear a moment after the track is live.
-    await Future<void>.delayed(const Duration(milliseconds: 500));
-    if (!mounted) return;
-    caps = probeWebCameraCapabilities();
-    if (caps.supportsTorch != _webCaps.supportsTorch) {
-      setState(() => _webCaps = caps);
-    }
-    _syncWebPreviewCss();
   }
 
   Future<void> _ensureCameraStarted() async {
@@ -297,18 +93,14 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     if (!mounted || _didReturn) return;
     if (_controller.value.isRunning || _controller.value.isStarting) return;
 
-    Future<void> start() async {
-      await _controller.start();
-      await _applyCloseRangeLensIfNeeded();
-      _armScanWarmup();
-    }
-
     try {
       await releaseWebCameraTracks();
       if (!mounted || _didReturn) return;
-      await start();
+      await _controller.start();
       _syncWebPreviewCss();
-      _syncWebScanRegion();
+      if (mounted && _lastError != null) {
+        setState(() => _lastError = null);
+      }
     } catch (e) {
       debugPrint('Camera start failed, retrying after release: $e');
       try {
@@ -318,9 +110,11 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
       await Future<void>.delayed(const Duration(milliseconds: 150));
       if (!mounted || _didReturn) return;
       try {
-        await start();
+        await _controller.start();
         _syncWebPreviewCss();
-        _syncWebScanRegion();
+        if (mounted && _lastError != null) {
+          setState(() => _lastError = null);
+        }
       } catch (e2) {
         debugPrint('Camera start retry failed: $e2');
         if (!mounted) return;
@@ -333,12 +127,13 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
 
   Future<void> _shutdownCamera() {
     return _shutdownFuture ??= () async {
-      _autoFocus.stop();
-      _webPoller.stop();
-      if (kIsWeb && _torchOn) {
+      if (kIsWeb && _webTorchOn) {
         try {
           await setWebTorch(false);
         } catch (_) {}
+      }
+      if (kIsWeb) {
+        applyWebVideoPreviewStyle(cssZoom: 1.0);
       }
       try {
         await _controller.stop();
@@ -353,30 +148,26 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     if (!mounted) return;
     setState(() {
       _lastError = null;
-      _webControlsProbed = false;
-      _webCaps = const WebCameraCapabilities.unsupported();
-      _torchOn = false;
-      _closeRangeLensApplied = false;
-      _readyToScan = false;
+      _webTorchOn = false;
+      _previewZoom = 1.0;
+      _webHardwareZoom = false;
+      _statusValue = null;
+      _statusHits = 0;
+      _barcodeFound = false;
     });
+    _statusIdleTimer?.cancel();
+    _voter.reset();
     _shutdownFuture = null;
     _cameraSession = _shutdownCamera();
     await _cameraSession;
     _shutdownFuture = null;
     _didReturn = false;
     await _ensureCameraStarted();
-    if (kIsWeb && mounted) {
-      _webControlsProbed = false;
-      await _probeWebControls();
-      _webControlsProbed = true;
-    }
   }
 
   Future<void> _leaveScanner({required VoidCallback afterStop}) async {
     if (_didReturn) return;
     _didReturn = true;
-    _liveClearTimer?.cancel();
-    _warmupTimer?.cancel();
     _cameraSession = _shutdownCamera();
     await _cameraSession;
     if (!mounted) return;
@@ -394,219 +185,74 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     }));
   }
 
-  void _openBarcodeResult(String value) {
+  void _acceptBarcode(String value) {
+    HapticFeedback.mediumImpact();
     unawaited(_leaveScanner(afterStop: () {
       if (!mounted) return;
-      HapticFeedback.mediumImpact();
       context.go(AppRoutes.barcodeResult(value));
     }));
   }
 
-  Rect? _mapBarcodeToPreview(Barcode barcode, Size captureSize) {
-    if (barcode.corners.isEmpty || captureSize.isEmpty || _previewSize.isEmpty) {
-      return null;
-    }
-
-    final scaleX = _previewSize.width / captureSize.width;
-    final scaleY = _previewSize.height / captureSize.height;
-    final scale = scaleX > scaleY ? scaleX : scaleY;
-    final dx = (_previewSize.width - captureSize.width * scale) / 2;
-    final dy = (_previewSize.height - captureSize.height * scale) / 2;
-
-    var minX = double.infinity;
-    var minY = double.infinity;
-    var maxX = -double.infinity;
-    var maxY = -double.infinity;
-    for (final p in barcode.corners) {
-      // The web plugin mirrors corners for front / desktop cameras, but the
-      // preview itself is un-mirrored by applyWebVideoPreviewStyle, so the
-      // corners have to be flipped back to line up with what is on screen.
-      final px = _webCornersMirrored ? captureSize.width - p.dx : p.dx;
-      final x = px * scale + dx;
-      final y = p.dy * scale + dy;
-      if (x < minX) minX = x;
-      if (y < minY) minY = y;
-      if (x > maxX) maxX = x;
-      if (y > maxY) maxY = y;
-    }
-    if (!minX.isFinite || !maxX.isFinite) return null;
-    return Rect.fromLTRB(minX, minY, maxX, maxY).inflate(8);
-  }
-
-  bool _barcodeIsInGuide(Rect? mapped, Rect guideRect) {
-    if (mapped == null) return false;
-    // Aiming, not framing: the code counts as scanned when it is centred on the
-    // frame. Requiring the whole reported box to sit inside rejects codes that
-    // are held close, or slightly tilted, even though they are clearly aimed.
-    if (guideRect.contains(mapped.center)) return true;
-
-    final overlap = mapped.intersect(guideRect);
-    if (overlap.isEmpty) return false;
-    final overlapArea = overlap.width * overlap.height;
-    final barcodeArea = mapped.width * mapped.height;
-    if (barcodeArea <= 0) return false;
-    return overlapArea >= barcodeArea * 0.35;
-  }
-
-  void _armScanWarmup() {
-    _warmupTimer?.cancel();
-    _readyToScan = false;
-    _warmupTimer = Timer(_focusWarmup, () {
-      if (!mounted || _didReturn) return;
-      _readyToScan = true;
-    });
-  }
-
-  Future<void> _applyCloseRangeLensIfNeeded() async {
-    if (kIsWeb || _closeRangeLensApplied || !mounted || _didReturn) return;
-    _closeRangeLensApplied = true;
-    try {
-      final best = await _controller.getBestCloseRangeScanningLens(
-        facing: CameraFacing.back,
-      );
-      if (best == null || best == CameraLensType.any) return;
-      final supported = await _controller.getSupportedLenses(
-        facing: CameraFacing.back,
-      );
-      if (!supported.contains(best)) return;
-      if (_controller.value.cameraLensType == best) return;
-      await _controller.switchCamera(
-        SelectCamera(facingDirection: CameraFacing.back, lensType: best),
-      );
-    } catch (e) {
-      debugPrint('Close-range lens skipped: $e');
-    }
-  }
-
-  void _handleDecodedValue(String raw, {Rect? mapped}) {
-    if (_didReturn || !_readyToScan) return;
-    if (_looksLikeQrPayload(raw)) return;
-    final value = _lookupValueFor(raw);
-    if (value.isEmpty) return;
-
-    // Lock immediately so a quick move cannot freeze the overlay without
-    // advancing. Show the value, then go to product lookup in the same turn.
-    _readyToScan = false;
-    setState(() {
-      _liveBarcodeValue = value;
-      _liveBarcodeRect = mapped ??
-          (_previewSize == Size.zero ? null : _guideRectFor(_previewSize));
-    });
-    debugPrint('Barcode accepted in frame: $raw -> $value');
-    _openBarcodeResult(value);
-  }
-
-  /// GTIN normalization only applies to numeric / GS1 codes. Running it on an
-  /// alphanumeric Code 128 would strip the letters and look up the wrong item.
-  String _lookupValueFor(String raw) {
-    final text = raw.trim();
-    final isGs1 = RegExp(r'\(\s*01\s*\)').hasMatch(text) ||
-        RegExp(r'^01\d{14}').hasMatch(text);
-    final isNumeric = BarcodeNormalize.digitsOnly(text).length == text.length;
-    if (!isGs1 && !isNumeric) return text;
-    return BarcodeNormalize.primary(text) ?? text;
-  }
-
-  bool _looksLikeQrPayload(String raw) {
-    final t = raw.trim().toLowerCase();
-    return t.startsWith('http://') ||
-        t.startsWith('https://') ||
-        t.startsWith('www.') ||
-        t.startsWith('mailto:') ||
-        t.startsWith('tel:');
-  }
-
-  bool _isLinearProductBarcode(Barcode barcode, String raw) {
-    switch (barcode.format) {
-      case BarcodeFormat.ean13:
-      case BarcodeFormat.ean8:
-      case BarcodeFormat.upcA:
-      case BarcodeFormat.upcE:
-      case BarcodeFormat.code128:
-      case BarcodeFormat.code39:
-      case BarcodeFormat.code93:
-      case BarcodeFormat.codabar:
-      case BarcodeFormat.itf14:
-      case BarcodeFormat.itf2of5:
-      case BarcodeFormat.itf2of5WithChecksum:
-      case BarcodeFormat.dataBar:
-      case BarcodeFormat.dataBarExpanded:
-      case BarcodeFormat.dataBarLimited:
-        return true;
-      default:
-        return BarcodeNormalize.looksLikeProductBarcode(raw);
-    }
-  }
-
   void _onDetect(BarcodeCapture capture) {
     if (_didReturn) return;
-    if (capture.barcodes.isEmpty) return;
-    if (_previewSize == Size.zero) return;
-
-    final guideRect = _guideRectFor(_previewSize);
 
     for (final barcode in capture.barcodes) {
       final raw = (barcode.rawValue ?? barcode.displayValue)?.trim();
       if (raw == null || raw.isEmpty) continue;
-      if (!_isLinearProductBarcode(barcode, raw)) continue;
 
-      final mapped = _mapBarcodeToPreview(barcode, capture.size);
-      if (mapped == null) {
-        // Web often omits corners on the first hits. The plugin already
-        // filters to scanWindow, so accept linear codes without a box.
-        if (kIsWeb) {
-          _handleDecodedValue(raw);
-          return;
-        }
-        continue;
+      final value = BarcodeValidator.normalize(raw);
+      if (value == null) continue;
+
+      final accepted = _voter.vote(value);
+      _statusIdleTimer?.cancel();
+
+      if (accepted != null) {
+        setState(() {
+          _statusValue = accepted;
+          _statusHits = _voter.voteCount;
+          _barcodeFound = true;
+        });
+        _acceptBarcode(accepted);
+        return;
       }
-      if (!_barcodeIsInGuide(mapped, guideRect)) continue;
 
-      setState(() => _liveBarcodeRect = mapped);
-      _handleDecodedValue(raw, mapped: mapped);
+      if (!mounted) return;
+      setState(() {
+        _statusValue = value;
+        _statusHits = _voter.voteCount;
+        _barcodeFound = false;
+      });
+      _statusIdleTimer = Timer(const Duration(milliseconds: 1500), () {
+        if (!mounted || _didReturn || _barcodeFound) return;
+        setState(() {
+          _statusValue = null;
+          _statusHits = 0;
+        });
+      });
       return;
     }
   }
 
-  Widget _buildCameraLayer({
-    required Widget scanner,
-    required Rect? recognitionRect,
-  }) {
-    final content = Stack(
-      fit: StackFit.expand,
-      clipBehavior: Clip.none,
-      children: [
-        scanner,
-        if (recognitionRect != null)
-          Positioned.fill(
-            child: IgnorePointer(
-              child: CustomPaint(
-                painter: _RecognitionRectPainter(rect: recognitionRect),
-              ),
-            ),
-          ),
-      ],
-    );
-
-    // Production Flutter web (CanvasKit/Skwasm) freezes HtmlElementView when a
-    // parent uses Transform or ClipRect. Keep the live <video> untransformed.
-    return content;
-  }
-
   void _syncWebPreviewCss() {
     if (!kIsWeb) return;
-    applyWebVideoPreviewStyle();
+    applyWebVideoPreviewStyle(
+      cssZoom: _webHardwareZoom ? 1.0 : _previewZoom,
+    );
     ensureWebVideoPlaysInline();
-    _webCornersMirrored = webPreviewIsMirrored();
+  }
+
+  bool get _torchOn {
+    if (kIsWeb && _controller.value.torchState == TorchState.unavailable) {
+      return _webTorchOn;
+    }
+    return _controller.value.torchState == TorchState.on;
   }
 
   Future<void> _toggleTorch() async {
     if (_torchBusy) return;
     _torchBusy = true;
     try {
-      if (kIsWeb) {
-        // mobile_scanner does not support torch on web. Use MediaTrack
-        // constraints. Chrome on Android rear cameras expose `torch`.
+      if (kIsWeb && _controller.value.torchState == TorchState.unavailable) {
         if (webIsAppleMobile()) {
           if (!mounted) return;
           ScaffoldMessenger.of(context)
@@ -622,14 +268,11 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
           return;
         }
 
-        final next = !_torchOn;
+        final next = !_webTorchOn;
         final ok = await setWebTorch(next);
         if (!mounted) return;
         if (ok) {
-          setState(() {
-            _torchOn = next;
-            _webCaps = probeWebCameraCapabilities();
-          });
+          setState(() => _webTorchOn = next);
         } else {
           ScaffoldMessenger.of(context)
             ..hideCurrentSnackBar()
@@ -645,8 +288,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
         return;
       }
 
-      final state = _controller.value.torchState;
-      if (state == TorchState.unavailable) {
+      if (_controller.value.torchState == TorchState.unavailable) {
         if (!mounted) return;
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
@@ -675,18 +317,51 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
     }
   }
 
+  Future<void> _setZoom(double factor) async {
+    final next = factor <= 1.0 ? 1.0 : 2.0;
+    if (kIsWeb) {
+      var hardware = false;
+      try {
+        hardware = await setWebZoomMultiplier(next);
+      } catch (e) {
+        debugPrint('Web camera zoom skipped: $e');
+      }
+      if (!mounted) return;
+      setState(() {
+        _previewZoom = next;
+        _webHardwareZoom = hardware;
+      });
+      _syncWebPreviewCss();
+      // mobile_scanner rewrites <video> CSS after start; re-apply once the
+      // plugin has settled so 2x is not overwritten.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      if (mounted) _syncWebPreviewCss();
+      return;
+    }
+
+    try {
+      await _controller.setZoomScale(next <= 1.0 ? 0.0 : 0.5);
+    } catch (e) {
+      debugPrint('Zoom failed: $e');
+    }
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _autoFocus.stop();
-    _diagnosticsTimer?.cancel();
-    _liveClearTimer?.cancel();
-    _warmupTimer?.cancel();
-    _controller.removeListener(_onControllerUpdate);
+    _statusIdleTimer?.cancel();
     _cameraSession = _shutdownCamera().whenComplete(() {
       _controller.dispose();
     });
     super.dispose();
+  }
+
+  _ScanUiStatus _uiStatus({required bool cameraRunning}) {
+    if (_lastError != null) return _ScanUiStatus.error;
+    if (_barcodeFound) return _ScanUiStatus.found;
+    if (!cameraRunning) return _ScanUiStatus.starting;
+    if (_statusHits > 0 && _statusValue != null) return _ScanUiStatus.reading;
+    return _ScanUiStatus.waiting;
   }
 
   @override
@@ -697,13 +372,19 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
         title: 'Scan barcode',
         tone: AppHeaderTone.dark,
         actions: [
-          IconButton(
-            tooltip: _torchOn ? 'Torch on' : 'Torch off',
-            onPressed: _toggleTorch,
-            icon: Icon(
-              _torchOn ? Icons.flashlight_on : Icons.flashlight_off,
-              color: _torchOn ? Colors.amber : Colors.white,
-            ),
+          ValueListenableBuilder<MobileScannerState>(
+            valueListenable: _controller,
+            builder: (context, state, _) {
+              final on = _torchOn;
+              return IconButton(
+                tooltip: on ? 'Torch on' : 'Torch off',
+                onPressed: _toggleTorch,
+                icon: Icon(
+                  on ? Icons.flashlight_on : Icons.flashlight_off,
+                  color: on ? Colors.amber : Colors.white,
+                ),
+              );
+            },
           ),
           IconButton(
             tooltip: 'Back to cart',
@@ -715,31 +396,15 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
       body: Column(
         children: [
           Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final areaSize = constraints.biggest;
-                if (_previewSize != areaSize) {
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (!mounted) return;
-                    if (_previewSize != areaSize) {
-                      setState(() => _previewSize = areaSize);
-                      _syncWebScanRegion(areaSize);
-                    }
-                  });
-                }
-
-                final guideRect = _guideRectFor(areaSize);
-                final recognitionRect = _liveBarcodeRect;
-
-                final scanner = MobileScanner(
+            child: Stack(
+              fit: StackFit.expand,
+              clipBehavior: Clip.none,
+              children: [
+                MobileScanner(
                   controller: _controller,
                   fit: BoxFit.cover,
                   tapToFocus: !kIsWeb,
                   useAppLifecycleState: false,
-                  // The engine drops any code whose box is not fully inside
-                  // this window, so it is the padded region, not the frame.
-                  // Aim is checked against the frame in _onDetect.
-                  scanWindow: _decodeRectFor(areaSize),
                   onDetect: _onDetect,
                   errorBuilder: (context, error) {
                     debugPrint('MobileScanner error: $error');
@@ -755,110 +420,207 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
                       onClose: _goToCart,
                     );
                   },
-                );
-
-                return Stack(
-                  fit: StackFit.expand,
-                  clipBehavior: Clip.none,
-                  children: [
-                    if (kIsWeb)
-                      _buildCameraLayer(
-                        scanner: scanner,
-                        recognitionRect: recognitionRect,
-                      )
-                    else
-                      ClipRect(
-                        child: _buildCameraLayer(
-                          scanner: scanner,
-                          recognitionRect: recognitionRect,
+                ),
+                ValueListenableBuilder<MobileScannerState>(
+                  valueListenable: _controller,
+                  builder: (context, state, _) {
+                    if (!state.isRunning) return const SizedBox.shrink();
+                    return Align(
+                      alignment: Alignment.bottomRight,
+                      child: Padding(
+                        padding: const EdgeInsets.only(right: 16, bottom: 24),
+                        child: _ZoomToggle(
+                          zoomed: kIsWeb
+                              ? _previewZoom > 1.0
+                              : state.zoomScale >= 0.25,
+                          onZoom: _setZoom,
                         ),
                       ),
-                    if (kIsWeb)
-                      Positioned.fill(
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTapDown: (details) =>
-                              _focusAtPreviewPoint(details.localPosition),
-                          child: const SizedBox.expand(),
-                        ),
-                      ),
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        child: CustomPaint(
-                          painter: _GuideFramePainter(cutout: guideRect),
-                        ),
-                      ),
-                    ),
-                    if (_liveBarcodeValue != null)
-                      Positioned(
-                        left: 16,
-                        right: 16,
-                        bottom: 24,
-                        child: IgnorePointer(
-                          child: Center(
-                            child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: 0.72),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: Colors.white, width: 1.5),
-                              ),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                child: Text(
-                                  _liveBarcodeValue!,
-                                  textAlign: TextAlign.center,
-                                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.w700,
-                                        letterSpacing: 0.6,
-                                      ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                );
-              },
+                    );
+                  },
+                ),
+              ],
             ),
           ),
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: AppSpacing.paddingLg,
+          ValueListenableBuilder<MobileScannerState>(
+            valueListenable: _controller,
+            builder: (context, state, _) {
+              return _ScanStatusBar(
+                status: _uiStatus(cameraRunning: state.isRunning),
+                value: _statusValue,
+                hits: _statusHits,
+                needed: _voter.requiredHits,
+              );
+            },
+          ),
+          if (_lastError != null)
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: AppSpacing.paddingLg,
+                child: SizedBox(
+                  width: double.infinity,
+                  child: TextButton.icon(
+                    onPressed: _restartScanner,
+                    style: TextButton.styleFrom(foregroundColor: Colors.white),
+                    icon: const Icon(Icons.refresh, color: Colors.white),
+                    label: const Text('Retry camera'),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+enum _ScanUiStatus { starting, waiting, reading, found, error }
+
+class _ScanStatusBar extends StatelessWidget {
+  const _ScanStatusBar({
+    required this.status,
+    required this.value,
+    required this.hits,
+    required this.needed,
+  });
+
+  final _ScanUiStatus status;
+  final String? value;
+  final int hits;
+  final int needed;
+
+  String get _title {
+    switch (status) {
+      case _ScanUiStatus.starting:
+        return 'Starting camera…';
+      case _ScanUiStatus.reading:
+        return 'Reading barcode…';
+      case _ScanUiStatus.found:
+        return 'Barcode found';
+      case _ScanUiStatus.error:
+        return 'Camera unavailable';
+      case _ScanUiStatus.waiting:
+        return 'Waiting for barcode';
+    }
+  }
+
+  String? get _subtitle {
+    switch (status) {
+      case _ScanUiStatus.reading:
+        if (value == null) return 'Hold steady';
+        return '$value  ·  $hits/$needed';
+      case _ScanUiStatus.found:
+        return value;
+      case _ScanUiStatus.waiting:
+        return 'Point the camera at a product barcode';
+      case _ScanUiStatus.starting:
+      case _ScanUiStatus.error:
+        return null;
+    }
+  }
+
+  IconData get _icon {
+    switch (status) {
+      case _ScanUiStatus.starting:
+        return Icons.camera_alt_outlined;
+      case _ScanUiStatus.reading:
+        return Icons.qr_code_scanner;
+      case _ScanUiStatus.found:
+        return Icons.check_circle_outline;
+      case _ScanUiStatus.error:
+        return Icons.error_outline;
+      case _ScanUiStatus.waiting:
+        return Icons.document_scanner_outlined;
+    }
+  }
+
+  Color get _accent {
+    switch (status) {
+      case _ScanUiStatus.reading:
+        return Colors.amber;
+      case _ScanUiStatus.found:
+        return const Color(0xFF7CFFB1);
+      case _ScanUiStatus.error:
+        return const Color(0xFFFF8A80);
+      case _ScanUiStatus.starting:
+      case _ScanUiStatus.waiting:
+        return Colors.white;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final subtitle = _subtitle;
+    final showMono = status == _ScanUiStatus.reading || status == _ScanUiStatus.found;
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+        child: Row(
+          children: [
+            Icon(_icon, color: _accent, size: 22),
+            const SizedBox(width: 12),
+            Expanded(
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  GestureDetector(
-                    onLongPress: _toggleDiagnostics,
-                    child: Text(
-                      _scanHintText(),
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                            color: Colors.white.withValues(alpha: 0.85),
-                          ),
-                      textAlign: TextAlign.center,
-                    ),
+                  Text(
+                    _title,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: _accent,
+                          fontWeight: FontWeight.w600,
+                        ),
                   ),
-                  if (_showDiagnostics) ...[
-                    const SizedBox(height: AppSpacing.sm),
-                    _DiagnosticsPanel(lines: _diagnosticLines()),
-                  ],
-                  if (_lastError != null) ...[
-                    const SizedBox(height: AppSpacing.sm),
-                    SizedBox(
-                      width: double.infinity,
-                      child: TextButton.icon(
-                        onPressed: _restartScanner,
-                        style: TextButton.styleFrom(foregroundColor: Colors.white),
-                        icon: const Icon(Icons.refresh, color: Colors.white),
-                        label: const Text('Retry camera'),
-                      ),
+                  if (subtitle != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Colors.white.withValues(alpha: 0.75),
+                            letterSpacing: showMono ? 0.4 : 0,
+                          ),
                     ),
                   ],
                 ],
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ZoomToggle extends StatelessWidget {
+  const _ZoomToggle({
+    required this.zoomed,
+    required this.onZoom,
+  });
+
+  final bool zoomed;
+  final Future<void> Function(double factor) onZoom;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black.withValues(alpha: 0.55),
+      borderRadius: BorderRadius.circular(20),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _ZoomChip(
+            label: '1x',
+            selected: !zoomed,
+            onTap: () => onZoom(1.0),
+          ),
+          _ZoomChip(
+            label: '2x',
+            selected: zoomed,
+            onTap: () => onZoom(2.0),
           ),
         ],
       ),
@@ -866,36 +628,32 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> with WidgetsBin
   }
 }
 
-class _DiagnosticsPanel extends StatelessWidget {
-  const _DiagnosticsPanel({required this.lines});
+class _ZoomChip extends StatelessWidget {
+  const _ZoomChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
 
-  final List<String> lines;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.75),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.white24),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (final line in lines)
-            Text(
-              line,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 11,
-                height: 1.5,
-                fontFamily: 'monospace',
-              ),
-            ),
-        ],
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? Colors.amber : Colors.white,
+            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+            fontSize: 13,
+          ),
+        ),
       ),
     );
   }
@@ -910,6 +668,19 @@ class _ScannerErrorState extends StatelessWidget {
     required this.onRetry,
     required this.onClose,
   });
+
+  String get _message {
+    switch (error.errorCode) {
+      case MobileScannerErrorCode.permissionDenied:
+        return kIsWeb
+            ? 'Please allow camera access in your browser.'
+            : 'Camera permission was denied. Enable it in settings and try again.';
+      default:
+        return kIsWeb
+            ? 'Please allow camera access in your browser.'
+            : 'Please allow camera access and try again.';
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -935,9 +706,7 @@ class _ScannerErrorState extends StatelessWidget {
                 Text('Camera unavailable', style: Theme.of(context).textTheme.titleLarge?.semiBold),
                 const SizedBox(height: AppSpacing.xs),
                 Text(
-                  kIsWeb
-                      ? 'Please allow camera access in your browser.'
-                      : 'Please allow camera access and try again.',
+                  _message,
                   style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
                   textAlign: TextAlign.center,
                 ),
@@ -966,46 +735,4 @@ class _ScannerErrorState extends StatelessWidget {
       ),
     );
   }
-}
-
-class _GuideFramePainter extends CustomPainter {
-  final Rect cutout;
-  _GuideFramePainter({required this.cutout});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final scrim = Paint()..color = Colors.black.withValues(alpha: 0.28);
-    final border = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.5;
-
-    final full = Path()..addRect(Offset.zero & size);
-    final hole = Path()..addRRect(RRect.fromRectAndRadius(cutout, const Radius.circular(20)));
-    canvas.drawPath(Path.combine(PathOperation.difference, full, hole), scrim);
-    canvas.drawRRect(RRect.fromRectAndRadius(cutout, const Radius.circular(20)), border);
-  }
-
-  @override
-  bool shouldRepaint(covariant _GuideFramePainter oldDelegate) => oldDelegate.cutout != cutout;
-}
-
-class _RecognitionRectPainter extends CustomPainter {
-  final Rect rect;
-  _RecognitionRectPainter({required this.rect});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final border = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3;
-    final fill = Paint()..color = Colors.white.withValues(alpha: 0.08);
-    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(10));
-    canvas.drawRRect(rrect, fill);
-    canvas.drawRRect(rrect, border);
-  }
-
-  @override
-  bool shouldRepaint(covariant _RecognitionRectPainter oldDelegate) => oldDelegate.rect != rect;
 }
