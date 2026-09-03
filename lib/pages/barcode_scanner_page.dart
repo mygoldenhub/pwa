@@ -71,7 +71,8 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
       formats: _productFormats,
       // High res on Android; web ignores this and uses the browser stream.
       cameraResolution: kIsWeb ? null : const Size(1920, 1080),
-      autoZoom: !kIsWeb,
+      // Zoom is manual only (1x / 2x / 3x). Auto-zoom only zooms in and gets stuck.
+      autoZoom: false,
       invertImage: invertImage && !kIsWeb,
       returnImage: false,
     );
@@ -117,7 +118,8 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
     _assistTimer?.cancel();
     _scanningSince = DateTime.now();
     _assistStep = 0;
-    // Every 3.5s nudge focus / zoom / invert if nothing was accepted yet.
+    // Every 3.5s nudge focus / invert if nothing was accepted yet.
+    // Zoom stays manual (1x / 2x / 3x) so it never gets stuck zoomed in.
     _assistTimer = Timer.periodic(const Duration(milliseconds: 3500), (_) {
       unawaited(_runAssistTick());
     });
@@ -138,20 +140,9 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
       }
     } catch (_) {}
 
-    // Step 1: auto 2x for distant barcodes if still reading nothing.
-    if (_assistStep == 1 && _previewZoom < 2.0 && _statusHits == 0) {
-      await _setZoom(2.0);
-      return;
-    }
-
-    // Step 2: try 3x if still cold.
-    if (_assistStep == 2 && _previewZoom < 3.0 && _statusHits == 0) {
-      await _setZoom(3.0);
-      return;
-    }
-
-    // Step 3+: alternate invert on Android for reflective / reverse-print codes.
-    if (!kIsWeb && _assistStep >= 3 && _statusHits == 0) {
+    // After a few focus nudges with no hit, alternate invert on Android for
+    // reflective / reverse-print codes. Zoom is never changed here.
+    if (!kIsWeb && _assistStep >= 2 && _statusHits == 0) {
       await _toggleInvertMode();
     }
   }
@@ -542,9 +533,10 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
     final elapsed = DateTime.now().difference(_scanningSince);
     if (elapsed.inSeconds < 4) return null;
     if (_invertImage) return 'Trying inverted image for glare / reverse print';
-    if (_previewZoom >= 3.0) return 'Hold steady · move closer if still blurry';
-    if (_previewZoom >= 2.0) return 'Zoomed in · use torch if there is glare';
-    return 'Tip: fill the center with the barcode, then hold steady';
+    if (_previewZoom >= 2.0) {
+      return 'Hold steady · tap 1x if the barcode is too close';
+    }
+    return 'Tip: fill the center with the barcode, or tap 2x if it is far';
   }
 
   @override
