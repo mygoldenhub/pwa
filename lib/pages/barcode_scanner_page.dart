@@ -50,15 +50,18 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
   Timer? _statusIdleTimer;
   Timer? _assistTimer;
   DateTime _scanningSince = DateTime.now();
-  int _assistStep = 0;
   Size _previewSize = Size.zero;
 
   /// Last focus target in normalized camera space (0..1). Updated when a
   /// barcode's corners are seen so AF locks onto the code, not the room.
   Offset _focusTarget = const Offset(0.5, 0.45);
   DateTime _lastFocusAt = DateTime.fromMillisecondsSinceEpoch(0);
-  static const _focusThrottle = Duration(milliseconds: 450);
-  static const _assistInterval = Duration(milliseconds: 1500);
+  DateTime _lastBarcodeFocusAt = DateTime.fromMillisecondsSinceEpoch(0);
+  /// Longer throttle avoids AF hunting (and brief freezes) when the product moves fast.
+  static const _focusThrottle = Duration(milliseconds: 700);
+  static const _assistInterval = Duration(milliseconds: 2000);
+  /// Ignore focus jumps bigger than this — usually means the label is whipping past.
+  static const _maxFocusJump = 0.18;
 
   static const _productFormats = <BarcodeFormat>[
     BarcodeFormat.ean13,
@@ -124,26 +127,42 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
   void _armAssist() {
     _assistTimer?.cancel();
     _scanningSince = DateTime.now();
-    _assistStep = 0;
-    // Frequent focus assist. Zoom stays manual (1x / 2x / 3x).
+    // Gentle focus assist only — never stop/restart the camera here.
+    // Zoom stays manual (1x / 2x / 3x).
     _assistTimer = Timer.periodic(_assistInterval, (_) {
       unawaited(_runAssistTick());
     });
-    // Immediate first nudge so we don't wait a full interval after open.
     unawaited(_runAssistTick());
   }
 
-  Future<void> _requestFocus(Offset point, {bool force = false}) async {
+  Future<void> _requestFocus(
+    Offset point, {
+    bool force = false,
+    bool fromBarcode = false,
+  }) async {
     if (!mounted || _didReturn || _barcodeFound) return;
     if (!_controller.value.isRunning) return;
 
     final now = DateTime.now();
     if (!force && now.difference(_lastFocusAt) < _focusThrottle) return;
-    _lastFocusAt = now;
-    _focusTarget = Offset(
+
+    final next = Offset(
       point.dx.clamp(0.05, 0.95),
       point.dy.clamp(0.05, 0.95),
     );
+
+    // Fast product motion makes corner points jump — chasing them freezes AF.
+    if (fromBarcode && !force) {
+      final dx = (next.dx - _focusTarget.dx).abs();
+      final dy = (next.dy - _focusTarget.dy).abs();
+      if (dx > _maxFocusJump || dy > _maxFocusJump) {
+        return;
+      }
+    }
+
+    _lastFocusAt = now;
+    if (fromBarcode) _lastBarcodeFocusAt = now;
+    _focusTarget = next;
 
     try {
       if (kIsWeb) {
@@ -160,16 +179,13 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
     if (!mounted || _didReturn || _barcodeFound) return;
     if (!_controller.value.isRunning) return;
 
-    _assistStep++;
+    // If we recently locked onto a barcode, don't yank focus back to center.
+    final recentlyOnBarcode =
+        DateTime.now().difference(_lastBarcodeFocusAt) < const Duration(seconds: 2);
+    if (recentlyOnBarcode) return;
 
-    // Prefer last barcode location; otherwise center of the scan guide.
     await _requestFocus(_focusTarget, force: true);
-
-    // Invert only after several failed focus cycles — rebuilding the camera
-    // is costly and should not interrupt early focus settling.
-    if (!kIsWeb && _assistStep >= 4 && _statusHits == 0) {
-      await _toggleInvertMode();
-    }
+    // Intentionally no auto invert / camera rebuild — that suspends the preview.
   }
 
   /// Normalized focus point from barcode corners in the capture image, or null.
@@ -194,6 +210,8 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
     return Offset(nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0));
   }
 
+  /// Manual invert for hard glare / reverse-print labels (Android).
+  /// Not automatic — rebuilding the camera freezes the preview.
   Future<void> _toggleInvertMode() async {
     if (kIsWeb || _didReturn || _barcodeFound) return;
     final next = !_invertImage;
@@ -375,12 +393,11 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
   void _onDetect(BarcodeCapture capture) {
     if (_didReturn) return;
 
-    // Lock AF onto any seen barcode (even before a valid decode) so the next
-    // frames are sharper — critical for GS1-128 / distant / hazy labels.
+    // Lock AF onto a steady barcode. Skip huge jumps (fast-moving product).
     for (final barcode in capture.barcodes) {
       final point = _focusPointFromBarcode(barcode, capture.size);
       if (point != null) {
-        unawaited(_requestFocus(point));
+        unawaited(_requestFocus(point, fromBarcode: true));
         break;
       }
     }
@@ -575,7 +592,6 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
 
     _voter.reset();
     _statusIdleTimer?.cancel();
-    _assistStep = 0;
     _focusTarget = const Offset(0.5, 0.45);
     if (mounted) {
       setState(() {
@@ -653,12 +669,15 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
     if (_barcodeFound || _lastError != null) return null;
     final elapsed = DateTime.now().difference(_scanningSince);
     if (elapsed.inSeconds < 3) return null;
-    if (_invertImage) return 'Trying inverted image for glare / reverse print';
+    if (_invertImage) return 'Inverted mode on · tap again to turn off';
     if (_previewZoom >= 2.0) {
       return 'Zoom settled · hold steady, or tap 1x if soft / too close';
     }
     if (_statusHits > 0) {
       return 'Almost there · hold steady while focus locks';
+    }
+    if (!kIsWeb && elapsed.inSeconds >= 8) {
+      return 'Tip: try Invert for glare / reverse-print labels';
     }
     return 'Tip: fill the guide with the barcode, tap to focus, or try 2x if far';
   }
@@ -671,6 +690,15 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
         title: 'Scan barcode',
         tone: AppHeaderTone.dark,
         actions: [
+          if (!kIsWeb)
+            IconButton(
+              tooltip: _invertImage ? 'Invert on' : 'Invert (hard labels)',
+              onPressed: _toggleInvertMode,
+              icon: Icon(
+                Icons.invert_colors,
+                color: _invertImage ? Colors.amber : Colors.white,
+              ),
+            ),
           ValueListenableBuilder<MobileScannerState>(
             valueListenable: _controller,
             builder: (context, state, _) {
