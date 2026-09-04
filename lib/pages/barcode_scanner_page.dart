@@ -679,6 +679,9 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
     if (!kIsWeb && elapsed.inSeconds >= 8) {
       return 'Tip: try Invert for glare / reverse-print labels';
     }
+    if (elapsed.inSeconds >= 5) {
+      return 'Tip: hold parallel to the label · avoid extreme side angles';
+    }
     return 'Tip: fill the guide with the barcode, tap to focus, or try 2x if far';
   }
 

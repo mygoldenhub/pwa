@@ -119,13 +119,32 @@ Future<String?> detectFromActiveVideo({
   final vw = vwRaw.toDouble();
   final vh = vhRaw.toDouble();
 
-  final videoCrop = _previewRectToVideo(cropInPreview, previewSize, vw, vh);
-  if (videoCrop.width < 8 || videoCrop.height < 8) return null;
+  // Landscape band first (common case), then a tall portrait band for
+  // vertical / 90° barcodes — without changing native phone path.
+  final crops = <Rect>[
+    cropInPreview,
+    _portraitDecodeBand(previewSize),
+  ];
 
-  return decoder.decode(
-    video: video,
-    videoCrop: videoCrop,
-    decodeMagnify: decodeMagnify,
+  for (final previewCrop in crops) {
+    final videoCrop = _previewRectToVideo(previewCrop, previewSize, vw, vh);
+    if (videoCrop.width < 8 || videoCrop.height < 8) continue;
+    final hit = await decoder.decode(
+      video: video,
+      videoCrop: videoCrop,
+      decodeMagnify: decodeMagnify,
+    );
+    if (hit != null && hit.isNotEmpty) return hit;
+  }
+  return null;
+}
+
+/// Tall center band so sideways (vertical) 1D codes still fill the crop.
+Rect _portraitDecodeBand(Size preview) {
+  return Rect.fromCenter(
+    center: Offset(preview.width / 2, preview.height * 0.45),
+    width: (preview.width * 0.42).clamp(1.0, preview.width),
+    height: (preview.height * 0.78).clamp(1.0, preview.height),
   );
 }
 
@@ -162,7 +181,7 @@ class _CropDecoder {
 
   static final _CropDecoder instance = _CropDecoder._();
 
-  static const int _budgetMs = 240;
+  static const int _budgetMs = 300;
   static const double _upscaleTargetWidth = 2000;
   static const int _nativeGracePeriod = 40;
   static const String _zxingScriptId = 'mobile-scanner-zxing-wasm';
@@ -171,6 +190,8 @@ class _CropDecoder {
 
   JSObject? _canvas;
   JSObject? _context;
+  JSObject? _auxCanvas;
+  JSObject? _auxContext;
   JSObject? _detector;
   bool _detectorUnusable = false;
   bool _zxingFormatsRejected = false;
@@ -254,37 +275,75 @@ class _CropDecoder {
     _attempts++;
     ensureBackend();
 
-    for (final scale in _scalesFor(videoCrop, decodeMagnify)) {
-      final drawn = _drawCrop(video, videoCrop, scale);
+    final scales = _scalesFor(videoCrop, decodeMagnify);
+    for (var i = 0; i < scales.length; i++) {
+      final drawn = _drawCrop(video, videoCrop, scales[i]);
       if (drawn == null) continue;
 
-      final native = await _detectNative(drawn);
-      if (native != null) {
+      // Fast path: upright crop (covers mild tilt / upside-down via engine).
+      final primary = await _detectPrimary(drawn);
+      if (primary != null) {
         _decodes++;
-        return native;
+        return primary;
       }
       if (clock.elapsedMilliseconds > _budgetMs) return null;
 
-      final zxing = await _detectZxing(drawn, invert: true);
-      if (zxing != null) {
-        _decodes++;
-        if (_nativeAvailable && ++_nativeMisses >= 2) {
-          _detectorUnusable = true;
-          _detector = null;
-          debugPrint('BarcodeDetector keeps missing codes, using zxing only');
+      // Orientation fallbacks only after the first scale misses — keeps the
+      // common upright path fast, then helps 90° / mirrored / steep skew.
+      if (i == 0) {
+        final oriented = await _detectOrientationFallbacks(
+          drawn,
+          clock: clock,
+        );
+        if (oriented != null) {
+          _decodes++;
+          return oriented;
         }
-        return zxing;
-      }
-      if (clock.elapsedMilliseconds > _budgetMs) return null;
-
-      // Second pass without invert in case tryInvert confused a clean code.
-      final zxingPlain = await _detectZxing(drawn, invert: false);
-      if (zxingPlain != null) {
-        _decodes++;
-        return zxingPlain;
+        if (clock.elapsedMilliseconds > _budgetMs) return null;
       }
     }
     return null;
+  }
+
+  Future<String?> _detectPrimary(_DrawnCrop drawn) async {
+    final native = await _detectNative(drawn);
+    if (native != null) {
+      return native;
+    }
+
+    final zxing = await _detectZxing(drawn, invert: true);
+    if (zxing != null) {
+      if (_nativeAvailable && ++_nativeMisses >= 2) {
+        _detectorUnusable = true;
+        _detector = null;
+        debugPrint('BarcodeDetector keeps missing codes, using zxing only');
+      }
+      return zxing;
+    }
+
+    return _detectZxing(drawn, invert: false);
+  }
+
+  /// Explicit 90°/270° and mirror passes for sideways / glass-reflected labels.
+  /// zxing tryRotate helps small skew; canvas turns catch vertical barcodes.
+  Future<String?> _detectOrientationFallbacks(
+    _DrawnCrop drawn, {
+    required Stopwatch clock,
+  }) async {
+    for (final turns in const <int>[1, 3]) {
+      if (clock.elapsedMilliseconds > _budgetMs) return null;
+      final rotated = _transformCrop(drawn, quarterTurns: turns);
+      if (rotated == null) continue;
+      final hit = await _detectZxing(rotated, invert: false) ??
+          await _detectZxing(rotated, invert: true);
+      if (hit != null) return hit;
+    }
+
+    if (clock.elapsedMilliseconds > _budgetMs) return null;
+    final mirrored = _transformCrop(drawn, mirrorX: true);
+    if (mirrored == null) return null;
+    return await _detectZxing(mirrored, invert: false) ??
+        await _detectZxing(mirrored, invert: true);
   }
 
   List<double> _scalesFor(Rect videoCrop, double decodeMagnify) {
@@ -333,6 +392,64 @@ class _CropDecoder {
     }
   }
 
+  /// Rotate (quarter turns clockwise) and/or mirror a drawn crop onto an aux canvas.
+  _DrawnCrop? _transformCrop(
+    _DrawnCrop source, {
+    int quarterTurns = 0,
+    bool mirrorX = false,
+  }) {
+    try {
+      final turns = quarterTurns % 4;
+      if (turns == 0 && !mirrorX) return source;
+
+      final aux = _ensureAuxCanvas();
+      final ctx = _auxContext;
+      if (aux == null || ctx == null) return null;
+
+      final swap = turns.isOdd;
+      final dw = swap ? source.height : source.width;
+      final dh = swap ? source.width : source.height;
+      if (dw < 8 || dh < 8) return null;
+
+      aux.setProperty('width'.toJS, dw.toJS);
+      aux.setProperty('height'.toJS, dh.toJS);
+      ctx.setProperty('imageSmoothingEnabled'.toJS, true.toJS);
+      ctx.setProperty('imageSmoothingQuality'.toJS, 'high'.toJS);
+
+      ctx.callMethod('save'.toJS);
+      // Map source into destination with rotation about center.
+      if (turns == 1) {
+        ctx.callMethodVarArgs('translate'.toJS, <JSAny>[dw.toJS, 0.toJS]);
+        ctx.callMethod('rotate'.toJS, (1.5707963267948966).toJS); // π/2
+      } else if (turns == 2) {
+        ctx.callMethodVarArgs('translate'.toJS, <JSAny>[dw.toJS, dh.toJS]);
+        ctx.callMethod('rotate'.toJS, (3.141592653589793).toJS); // π
+      } else if (turns == 3) {
+        ctx.callMethodVarArgs('translate'.toJS, <JSAny>[0.toJS, dh.toJS]);
+        ctx.callMethod('rotate'.toJS, (-1.5707963267948966).toJS);
+      }
+      if (mirrorX) {
+        ctx.callMethodVarArgs(
+          'translate'.toJS,
+          <JSAny>[source.width.toJS, 0.toJS],
+        );
+        ctx.callMethodVarArgs('scale'.toJS, <JSAny>[(-1).toJS, 1.toJS]);
+      }
+
+      ctx.callMethodVarArgs('drawImage'.toJS, <JSAny>[
+        source.canvas,
+        0.toJS,
+        0.toJS,
+      ]);
+      ctx.callMethod('restore'.toJS);
+
+      return _DrawnCrop(canvas: aux, width: dw, height: dh);
+    } catch (e) {
+      debugPrint('Barcode transform failed: $e');
+      return null;
+    }
+  }
+
   JSObject? _ensureCanvas() {
     final existing = _canvas;
     if (existing != null) return existing;
@@ -350,6 +467,26 @@ class _CropDecoder {
 
     _canvas = jsCanvas;
     _context = context as JSObject;
+    return jsCanvas;
+  }
+
+  JSObject? _ensureAuxCanvas() {
+    final existing = _auxCanvas;
+    if (existing != null) return existing;
+
+    final document = globalContext.getProperty('document'.toJS) as JSObject;
+    final canvas = document.callMethod('createElement'.toJS, 'canvas'.toJS);
+    if (canvas == null) return null;
+    final jsCanvas = canvas as JSObject;
+
+    final attributes = JSObject()
+      ..setProperty('willReadFrequently'.toJS, true.toJS);
+    final context =
+        jsCanvas.callMethodVarArgs('getContext'.toJS, <JSAny>['2d'.toJS, attributes]);
+    if (context == null) return null;
+
+    _auxCanvas = jsCanvas;
+    _auxContext = context as JSObject;
     return jsCanvas;
   }
 
@@ -420,11 +557,17 @@ class _CropDecoder {
 
   Future<String?> _detectZxing(_DrawnCrop crop, {bool invert = false}) async {
     final module = _zxingModule;
-    final context = _context;
-    if (module == null || context == null) return null;
+    if (module == null) return null;
 
     try {
-      final imageData = context.callMethodVarArgs('getImageData'.toJS, <JSAny>[
+      final ctx = crop.canvas.callMethodVarArgs(
+            'getContext'.toJS,
+            <JSAny>['2d'.toJS],
+          ) as JSObject? ??
+          _context;
+      if (ctx == null) return null;
+
+      final imageData = ctx.callMethodVarArgs('getImageData'.toJS, <JSAny>[
         0.toJS,
         0.toJS,
         crop.width.toJS,
@@ -434,6 +577,7 @@ class _CropDecoder {
 
       final options = JSObject()
         ..setProperty('tryHarder'.toJS, true.toJS)
+        // Small in-plane skew; canvas quarter-turns cover 90° / vertical labels.
         ..setProperty('tryRotate'.toJS, true.toJS)
         ..setProperty('tryInvert'.toJS, invert.toJS)
         ..setProperty('maxNumberOfSymbols'.toJS, 4.toJS);
