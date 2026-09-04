@@ -438,11 +438,14 @@ void ensureWebVideoPlaysInline() {
 double _cssZoom = 1.0;
 
 /// Optical / digital zoom via MediaTrackConstraints when the camera exposes
-/// a `zoom` capability (Chrome on many Android phones). [multiplier] is 1.0
-/// for the widest view and 2.0 for 2x. Returns false when the track cannot
-/// be zoomed, so callers can fall back to CSS.
+/// a `zoom` capability (Chrome on many Android phones).
+///
+/// [multiplier] is 1.0 / 2.0 / 3.0. Returns false when the track cannot be
+/// zoomed, so callers can fall back to CSS + decode-crop magnification.
 Future<bool> setWebZoomMultiplier(double multiplier) async {
-  final factor = multiplier <= 1.0 ? 1.0 : 2.0;
+  final factor = multiplier <= 1.0 ? 1.0 : (multiplier <= 2.0 ? 2.0 : 3.0);
+  // Map 1x→0, 2x→0.5, 3x→1.0 across the camera's allowed zoom range.
+  final t = ((factor - 1.0) / 2.0).clamp(0.0, 1.0);
   var changed = false;
   for (final track in _focusableTracks()) {
     final caps = _capabilitiesOf(track);
@@ -451,7 +454,9 @@ Future<bool> setWebZoomMultiplier(double multiplier) async {
     final min = zoom['min'];
     final max = zoom['max'];
     if (min is! num || max is! num || max <= min) continue;
-    final target = (min.toDouble() * factor).clamp(min.toDouble(), max.toDouble());
+    final target =
+        (min.toDouble() + (max.toDouble() - min.toDouble()) * t)
+            .clamp(min.toDouble(), max.toDouble());
     var ok = await _applyAdvanced(track, {'zoom': target});
     ok = ok || await _applyIdeal(track, {'zoom': target});
     changed = changed || ok;

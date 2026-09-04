@@ -428,29 +428,51 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
     return false;
   }
 
-  /// Wide center band used only on web to upscale 1D bars. Not a UI frame.
-  /// Tall enough for GS1-128 labels; wide enough for distant EAN/UPC.
+  /// Decode band for the web poller.
+  ///
+  /// When CSS zoom is active (no hardware zoom), the live <video> buffer is
+  /// still full-frame — so we crop the same center region the user sees and
+  /// upscale it for decode. Hardware zoom already crops in-camera.
   Rect _webDecodeRectFor(Size size) {
+    final cssZoom = (!_webHardwareZoom && _previewZoom > 1.0) ? _previewZoom : 1.0;
+    final widthFrac = (0.96 / cssZoom).clamp(0.30, 0.96);
+    final heightFrac = (0.52 / cssZoom).clamp(0.20, 0.55);
     return Rect.fromCenter(
       center: Offset(size.width / 2, size.height * 0.45),
-      width: (size.width * 0.96).clamp(1.0, size.width),
-      height: (size.height * 0.52).clamp(1.0, size.height),
+      width: (size.width * widthFrac).clamp(1.0, size.width),
+      height: (size.height * heightFrac).clamp(1.0, size.height),
     );
   }
 
-  void _syncWebPoller([Size? previewSize]) {
+  double get _webDecodeMagnify {
+    // CSS zoom does not change the camera buffer — boost decode upscale instead.
+    if (_webHardwareZoom) return 1.0;
+    if (_previewZoom >= 2.5) return 3.0;
+    if (_previewZoom >= 1.5) return 2.0;
+    return 1.0;
+  }
+
+  void _syncWebPoller({Size? previewSize, bool forceRestart = false}) {
     if (!kIsWeb || !mounted || _didReturn) return;
     final size = previewSize ?? _previewSize;
     if (size == Size.zero) return;
     final crop = _webDecodeRectFor(size);
-    _webPoller.setScanRegion(previewSize: size, cropInPreview: crop);
-    if (_webPoller.isRunning) return;
+    final magnify = _webDecodeMagnify;
+    if (_webPoller.isRunning && !forceRestart) {
+      _webPoller.updateRegion(
+        previewSize: size,
+        cropInPreview: crop,
+        decodeMagnify: magnify,
+      );
+      return;
+    }
     _webPoller.start(
       onCode: (value) {
         _considerDecoded(value);
       },
       previewSize: size,
       cropInPreview: crop,
+      decodeMagnify: magnify,
       interval: const Duration(milliseconds: 80),
     );
   }
@@ -540,14 +562,44 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
   }
 
   double _nativeZoomScale(double factor) {
-    // mobile_scanner zoomScale is 0..1. Map 1x→0, 2x→0.45, 3x→0.75.
+    // Keep zoom inside a quality-friendly band of the camera zoom curve.
+    // Aggressive linearZoom (near 1.0) is often pure digital and softens bars.
     if (factor <= 1.0) return 0.0;
-    if (factor <= 2.0) return 0.45;
-    return 0.75;
+    if (factor <= 2.0) return 0.32;
+    return 0.55;
+  }
+
+  /// After zoom changes: reset votes, retarget AF, and retune web decode crop.
+  Future<void> _afterZoomChanged() async {
+    if (!mounted || _didReturn || _barcodeFound) return;
+
+    _voter.reset();
+    _statusIdleTimer?.cancel();
+    _assistStep = 0;
+    _focusTarget = const Offset(0.5, 0.45);
+    if (mounted) {
+      setState(() {
+        _statusValue = null;
+        _statusHits = 0;
+      });
+    }
+
+    _syncWebPoller(forceRestart: false);
+    // Zoom changes focus distance — force AF onto the scan guide center.
+    await _requestFocus(_focusTarget, force: true);
+    await Future<void>.delayed(const Duration(milliseconds: 180));
+    if (!mounted || _didReturn || _barcodeFound) return;
+    await _requestFocus(_focusTarget, force: true);
   }
 
   Future<void> _setZoom(double factor) async {
     final next = factor <= 1.0 ? 1.0 : (factor <= 2.0 ? 2.0 : 3.0);
+    if (next == _previewZoom && !kIsWeb) {
+      // Still re-settle focus if user taps the same level again.
+      await _afterZoomChanged();
+      return;
+    }
+
     if (kIsWeb) {
       var hardware = false;
       try {
@@ -565,12 +617,14 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
       // plugin has settled so zoom is not overwritten.
       await Future<void>.delayed(const Duration(milliseconds: 50));
       if (mounted) _syncWebPreviewCss();
+      await _afterZoomChanged();
       return;
     }
 
     try {
       await _controller.setZoomScale(_nativeZoomScale(next));
       if (mounted) setState(() => _previewZoom = next);
+      await _afterZoomChanged();
     } catch (e) {
       debugPrint('Zoom failed: $e');
     }
@@ -601,7 +655,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
     if (elapsed.inSeconds < 3) return null;
     if (_invertImage) return 'Trying inverted image for glare / reverse print';
     if (_previewZoom >= 2.0) {
-      return 'Hold steady · tap 1x if the barcode is too close';
+      return 'Zoom settled · hold steady, or tap 1x if soft / too close';
     }
     if (_statusHits > 0) {
       return 'Almost there · hold steady while focus locks';
@@ -649,7 +703,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
                     if (!mounted) return;
                     if (_previewSize != areaSize) {
                       setState(() => _previewSize = areaSize);
-                      _syncWebPoller(areaSize);
+                      _syncWebPoller(previewSize: areaSize);
                     }
                   });
                 }

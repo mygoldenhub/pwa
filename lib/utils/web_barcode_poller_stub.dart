@@ -7,13 +7,21 @@ class WebBarcodePoller {
   void setScanRegion({
     required Size previewSize,
     required Rect cropInPreview,
+    double decodeMagnify = 1.0,
   }) {}
 
   void start({
     required void Function(String value) onCode,
     Size? previewSize,
     Rect? cropInPreview,
-    Duration interval = const Duration(milliseconds: 120),
+    double decodeMagnify = 1.0,
+    Duration interval = const Duration(milliseconds: 80),
+  }) {}
+
+  void updateRegion({
+    required Size previewSize,
+    required Rect cropInPreview,
+    double decodeMagnify = 1.0,
   }) {}
 
   void stop() {}

@@ -18,29 +18,51 @@ class WebBarcodePoller {
   void Function(String value)? _onCode;
   Size _previewSize = Size.zero;
   Rect _cropInPreview = Rect.zero;
+  /// Extra decode magnification when CSS zoom is used (hardware zoom = 1.0).
+  double _decodeMagnify = 1.0;
+  Duration _interval = const Duration(milliseconds: 80);
 
   bool get isRunning => _timer != null;
 
   void setScanRegion({
     required Size previewSize,
     required Rect cropInPreview,
+    double decodeMagnify = 1.0,
   }) {
     _previewSize = previewSize;
     _cropInPreview = cropInPreview;
+    _decodeMagnify = decodeMagnify <= 1.0 ? 1.0 : decodeMagnify;
   }
 
   void start({
     required void Function(String value) onCode,
     Size? previewSize,
     Rect? cropInPreview,
-    Duration interval = const Duration(milliseconds: 120),
+    double decodeMagnify = 1.0,
+    Duration interval = const Duration(milliseconds: 80),
   }) {
     stop();
     _CropDecoder.instance.resetSession();
     _onCode = onCode;
     if (previewSize != null) _previewSize = previewSize;
     if (cropInPreview != null) _cropInPreview = cropInPreview;
-    _timer = Timer.periodic(interval, (_) => unawaited(_tick()));
+    _decodeMagnify = decodeMagnify <= 1.0 ? 1.0 : decodeMagnify;
+    _interval = interval;
+    _timer = Timer.periodic(_interval, (_) => unawaited(_tick()));
+  }
+
+  /// Keep polling but refresh crop / magnify after a zoom change.
+  void updateRegion({
+    required Size previewSize,
+    required Rect cropInPreview,
+    double decodeMagnify = 1.0,
+  }) {
+    setScanRegion(
+      previewSize: previewSize,
+      cropInPreview: cropInPreview,
+      decodeMagnify: decodeMagnify,
+    );
+    _CropDecoder.instance.resetSession();
   }
 
   void stop() {
@@ -57,6 +79,7 @@ class WebBarcodePoller {
       final code = await detectFromActiveVideo(
         previewSize: _previewSize,
         cropInPreview: _cropInPreview,
+        decodeMagnify: _decodeMagnify,
       );
       if (code != null && code.isNotEmpty) {
         _onCode?.call(code);
@@ -72,6 +95,7 @@ class WebBarcodePoller {
 Future<String?> detectFromActiveVideo({
   Size previewSize = Size.zero,
   Rect cropInPreview = Rect.zero,
+  double decodeMagnify = 1.0,
 }) async {
   if (cropInPreview.width <= 8 ||
       cropInPreview.height <= 8 ||
@@ -98,7 +122,11 @@ Future<String?> detectFromActiveVideo({
   final videoCrop = _previewRectToVideo(cropInPreview, previewSize, vw, vh);
   if (videoCrop.width < 8 || videoCrop.height < 8) return null;
 
-  return decoder.decode(video: video, videoCrop: videoCrop);
+  return decoder.decode(
+    video: video,
+    videoCrop: videoCrop,
+    decodeMagnify: decodeMagnify,
+  );
 }
 
 const List<String> _nativeLinearFormats = <String>[
@@ -220,12 +248,13 @@ class _CropDecoder {
   Future<String?> decode({
     required JSObject video,
     required Rect videoCrop,
+    double decodeMagnify = 1.0,
   }) async {
     final clock = Stopwatch()..start();
     _attempts++;
     ensureBackend();
 
-    for (final scale in _scalesFor(videoCrop)) {
+    for (final scale in _scalesFor(videoCrop, decodeMagnify)) {
       final drawn = _drawCrop(video, videoCrop, scale);
       if (drawn == null) continue;
 
@@ -258,10 +287,12 @@ class _CropDecoder {
     return null;
   }
 
-  List<double> _scalesFor(Rect videoCrop) {
+  List<double> _scalesFor(Rect videoCrop, double decodeMagnify) {
+    final mag = decodeMagnify <= 1.0 ? 1.0 : decodeMagnify;
+    final targetW = (_upscaleTargetWidth * mag).clamp(1200.0, 2800.0);
     final upscale =
-        (_upscaleTargetWidth / videoCrop.width).clamp(1.0, 4.5).toDouble();
-    if (upscale <= 1.05) return const <double>[1.0, 1.35];
+        (targetW / videoCrop.width).clamp(1.0, 5.0).toDouble();
+    if (upscale <= 1.05) return <double>[1.0, 1.35 * mag.clamp(1.0, 2.0)];
     if (upscale <= 2.0) return <double>[1.0, 1.4, upscale];
     return <double>[1.0, upscale * 0.55, upscale * 0.8, upscale];
   }
