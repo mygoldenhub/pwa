@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 import 'dart:ui';
@@ -29,7 +30,7 @@ Future<bool> _applyConstraints(JSObject track, JSObject constraints) async {
     }
     return true;
   } catch (_) {
-    // Laptop webcams often throw OverconstrainedError for focus/zoom.
+    // Laptop webcams often throw OverconstrainedError for focus.
     return false;
   }
 }
@@ -53,6 +54,35 @@ Future<bool> _applyIdeal(JSObject track, Map<String, Object> ideal) {
     }
   }
   return _applyConstraints(track, constraints);
+}
+
+/// `advanced: [{...}]` with a nested `pointsOfInterest` entry.
+Future<bool> _applyAdvancedWithPoint(
+  JSObject track,
+  Map<String, Object> advanced,
+  Offset point,
+) {
+  final set = _jsConstraint(advanced);
+  final jsPoint = JSObject()
+    ..setProperty('x'.toJS, point.dx.toJS)
+    ..setProperty('y'.toJS, point.dy.toJS);
+  set.setProperty('pointsOfInterest'.toJS, <JSAny>[jsPoint].toJS);
+
+  final constraints = JSObject();
+  constraints.setProperty('advanced'.toJS, <JSAny>[set].toJS);
+  return _applyConstraints(track, constraints);
+}
+
+bool _pointOfInterestSupported() {
+  try {
+    final nav = globalContext.getProperty('navigator'.toJS) as JSObject?;
+    final devices = nav?.getProperty('mediaDevices'.toJS) as JSObject?;
+    final supported = devices?.callMethod('getSupportedConstraints'.toJS);
+    final dart = supported?.dartify();
+    return dart is Map && dart['pointsOfInterest'] == true;
+  } catch (_) {
+    return false;
+  }
 }
 
 int _jsLength(JSObject list) {
@@ -105,6 +135,12 @@ Map<Object?, Object?>? _capabilitiesOf(JSObject track) {
   return null;
 }
 
+List<String> _focusModes(Map<Object?, Object?>? caps) {
+  final modes = caps?['focusMode'];
+  if (modes is List) return modes.map((e) => '$e').toList();
+  return const <String>[];
+}
+
 bool _focusSupported(Map<Object?, Object?>? caps) {
   if (caps == null) return false;
   final modes = caps['focusMode'];
@@ -112,6 +148,31 @@ bool _focusSupported(Map<Object?, Object?>? caps) {
     return modes.map((e) => '$e').any((m) => m == 'continuous' || m == 'manual' || m == 'single-shot');
   }
   return modes != null;
+}
+
+WebFocusRange? _focusRange(Map<Object?, Object?>? caps) {
+  if (!_focusModes(caps).contains('manual')) return null;
+  final range = caps?['focusDistance'];
+  if (range is! Map) return null;
+  final min = range['min'];
+  final max = range['max'];
+  if (min is! num || max is! num || max <= min) return null;
+  final step = range['step'];
+  return WebFocusRange(
+    min: min.toDouble(),
+    max: max.toDouble(),
+    step: step is num ? step.toDouble() : 0,
+  );
+}
+
+/// Live tracks that can be focused. Front cameras are skipped: they are fixed
+/// focus on most devices and would only soak up the constraint calls.
+List<JSObject> _focusableTracks() {
+  return [
+    for (final track in _liveVideoTracks())
+      if (_facingModeOf(track) != 'user' && _focusSupported(_capabilitiesOf(track)))
+        track,
+  ];
 }
 
 bool _torchSupported(Map<Object?, Object?>? caps) {
@@ -122,6 +183,17 @@ bool _torchSupported(Map<Object?, Object?>? caps) {
     return fill.map((e) => '$e'.toLowerCase()).any((m) => m == 'torch' || m == 'flash');
   }
   return false;
+}
+
+bool _zoomSupported(Map<Object?, Object?>? caps) {
+  if (caps == null) return false;
+  final zoom = caps['zoom'];
+  if (zoom is Map) {
+    final min = zoom['min'];
+    final max = zoom['max'];
+    return min is num && max is num && max > min;
+  }
+  return caps.containsKey('zoom');
 }
 
 String? _facingModeOf(JSObject track) {
@@ -151,134 +223,101 @@ bool _isAppleMobileWeb() {
   }
 }
 
-({double min, double max})? _zoomRange(Map<Object?, Object?>? caps) {
-  if (caps == null) return null;
-  final zoom = caps['zoom'];
-  if (zoom is Map) {
-    final min = zoom['min'];
-    final max = zoom['max'];
-    if (min is num && max is num && max > min) {
-      return (min: min.toDouble(), max: max.toDouble());
-    }
-  }
-  // Some browsers expose zoom as `{min,max}` only.
-  return null;
-}
-
 WebCameraCapabilities probeWebCameraCapabilities() {
   final tracks = _liveVideoTracks();
   if (tracks.isEmpty) return const WebCameraCapabilities.unsupported();
 
   var supportsFocus = false;
-  var supportsZoom = false;
   var supportsTorch = false;
-  var zoomMin = 1.0;
-  var zoomMax = 1.0;
+  var supportsFocusDistance = false;
+  var supportsZoom = false;
 
   for (final track in tracks) {
     final caps = _capabilitiesOf(track);
     if (_focusSupported(caps)) supportsFocus = true;
     if (_torchSupported(caps)) supportsTorch = true;
-    final zoom = _zoomRange(caps);
-    if (zoom != null) {
-      supportsZoom = true;
-      zoomMin = zoom.min;
-      zoomMax = zoom.max;
-    }
+    if (_focusRange(caps) != null) supportsFocusDistance = true;
+    if (_zoomSupported(caps)) supportsZoom = true;
   }
 
   return WebCameraCapabilities(
     supportsFocus: supportsFocus,
-    supportsZoom: supportsZoom,
     supportsTorch: supportsTorch,
-    zoomMin: zoomMin,
-    zoomMax: zoomMax,
+    supportsFocusDistance: supportsFocusDistance,
+    supportsZoom: supportsZoom,
   );
 }
 
 Future<WebCameraCapabilities> enableContinuousCameraFocus() async {
   final caps = probeWebCameraCapabilities();
   if (!caps.supportsFocus) return caps;
-
-  for (final track in _liveVideoTracks()) {
-    final trackCaps = _capabilitiesOf(track);
-    if (!_focusSupported(trackCaps)) continue;
-
-    // Prefer continuous AF when the device advertises it.
-    final modes = trackCaps?['focusMode'];
-    final modeList = modes is List ? modes.map((e) => '$e').toList() : const <String>[];
-    if (modeList.contains('continuous')) {
-      final ok = await _applyIdeal(track, const {'focusMode': 'continuous'});
-      if (!ok) {
-        await _applyAdvanced(track, const {'focusMode': 'continuous'});
-      }
-    }
-  }
+  await requestWebAutoFocus();
   return caps;
 }
 
-/// Tap/manual focus. Uses hardware focus when available, otherwise zoom.
-Future<bool> focusCameraAt(Offset normalizedPoint) async {
-  final caps = probeWebCameraCapabilities();
+/// Hand the lens back to the camera's own autofocus, aimed at [point] when the
+/// browser supports a point of interest (normalized 0..1 in camera space).
+///
+/// The `advanced` form is tried first: Chrome ignores a plain `focusMode`
+/// constraint on most Android cameras.
+Future<bool> requestWebAutoFocus({Offset? point}) async {
   var changed = false;
+  final withPoint = point != null && _pointOfInterestSupported();
 
-  if (caps.supportsFocus) {
-    final dy = normalizedPoint.dy.clamp(0.0, 1.0);
-    final focusDistance = (1.0 - dy).clamp(0.0, 1.0);
-    for (final track in _liveVideoTracks()) {
-      final trackCaps = _capabilitiesOf(track);
-      if (!_focusSupported(trackCaps)) continue;
+  for (final track in _focusableTracks()) {
+    final modes = _focusModes(_capabilitiesOf(track));
+    final mode = modes.contains('continuous')
+        ? 'continuous'
+        : modes.contains('single-shot')
+            ? 'single-shot'
+            : null;
+    if (mode == null) continue;
 
-      final modes = trackCaps?['focusMode'];
-      final modeList = modes is List ? modes.map((e) => '$e').toList() : const <String>[];
-
-      if (modeList.contains('manual') && trackCaps?.containsKey('focusDistance') == true) {
-        changed = await _applyAdvanced(track, {
-              'focusMode': 'manual',
-              'focusDistance': focusDistance,
-            }) ||
-            changed;
-      } else if (modeList.contains('single-shot')) {
-        changed = await _applyIdeal(track, const {'focusMode': 'single-shot'}) || changed;
-      } else if (modeList.contains('continuous')) {
-        // Re-trigger continuous AF — best effort "refocus".
-        changed = await _applyIdeal(track, const {'focusMode': 'continuous'}) || changed;
-      }
+    var ok = false;
+    if (withPoint) {
+      final clamped = Offset(
+        point.dx.clamp(0.0, 1.0),
+        point.dy.clamp(0.0, 1.0),
+      );
+      ok = await _applyAdvancedWithPoint(track, {'focusMode': mode}, clamped);
     }
+    ok = ok || await _applyAdvanced(track, {'focusMode': mode});
+    ok = ok || await _applyIdeal(track, {'focusMode': mode});
+    changed = changed || ok;
   }
-
-  if (!changed && caps.supportsZoom) {
-    // Map vertical tap to zoom: top = max zoom, bottom = min zoom.
-    final t = (1.0 - normalizedPoint.dy.clamp(0.0, 1.0));
-    changed = await setWebCameraZoom(t) || changed;
-  }
-
   return changed;
 }
 
-/// [normalized] is 0..1 within the camera's zoom range.
-Future<bool> setWebCameraZoom(double normalized) async {
-  final caps = probeWebCameraCapabilities();
-  if (!caps.supportsZoom) return false;
-
-  final t = normalized.clamp(0.0, 1.0);
-  final zoom = caps.zoomMin + (caps.zoomMax - caps.zoomMin) * t;
-  var changed = false;
-
+/// The lens positions the camera will accept, or null when it cannot be driven
+/// manually.
+WebFocusRange? webFocusRange() {
   for (final track in _liveVideoTracks()) {
-    final trackCaps = _capabilitiesOf(track);
-    if (_zoomRange(trackCaps) == null) continue;
+    if (_facingModeOf(track) == 'user') continue;
+    final range = _focusRange(_capabilitiesOf(track));
+    if (range != null) return range;
+  }
+  return null;
+}
 
-    // Try simple constraint first, then advanced.
-    final ok = await _applyIdeal(track, {'zoom': zoom});
-    if (ok) {
-      changed = true;
-    } else {
-      changed = await _applyAdvanced(track, {'zoom': zoom}) || changed;
-    }
+/// Park the lens at an explicit distance, for a focus sweep.
+Future<bool> setWebFocusDistance(double distance) async {
+  var changed = false;
+  for (final track in _focusableTracks()) {
+    final range = _focusRange(_capabilitiesOf(track));
+    if (range == null) continue;
+    final value = distance.clamp(range.min, range.max);
+    final ok = await _applyAdvanced(track, {
+      'focusMode': 'manual',
+      'focusDistance': value,
+    });
+    changed = changed || ok;
   }
   return changed;
 }
+
+/// Tap to focus. Refocuses on [normalizedPoint] (0..1 in camera space).
+Future<bool> focusCameraAt(Offset normalizedPoint) =>
+    requestWebAutoFocus(point: normalizedPoint);
 
 /// Set flashlight when the browser camera exposes a torch constraint.
 /// Chrome on Android requires the `advanced: [{ torch }]` form.
@@ -312,6 +351,39 @@ Future<bool> webTorchSupported() async {
   return probeWebCameraCapabilities().supportsTorch;
 }
 
+bool webZoomSupported() => probeWebCameraCapabilities().supportsZoom;
+
+double? webZoomLevel() {
+  for (final track in _liveVideoTracks()) {
+    if (_facingModeOf(track) == 'user') continue;
+    try {
+      final settings = track.callMethod('getSettings'.toJS)?.dartify();
+      if (settings is Map && settings['zoom'] is num) {
+        return (settings['zoom'] as num).toDouble();
+      }
+    } catch (_) {}
+  }
+  return null;
+}
+
+/// Apply digital zoom when the barcode is too small in the frame.
+Future<bool> setWebZoom(double level) async {
+  var changed = false;
+  for (final track in _focusableTracks()) {
+    final caps = _capabilitiesOf(track);
+    final zoom = caps?['zoom'];
+    if (zoom is! Map) continue;
+    final min = zoom['min'];
+    final max = zoom['max'];
+    if (min is! num || max is! num || max <= min) continue;
+    final value = level.clamp(min.toDouble(), max.toDouble());
+    var ok = await _applyAdvanced(track, {'zoom': value});
+    ok = ok || await _applyIdeal(track, {'zoom': value});
+    changed = changed || ok;
+  }
+  return changed;
+}
+
 /// True when mobile_scanner CSS-mirrors the preview (front / desktop cameras).
 bool webPreviewIsMirrored() {
   final tracks = _liveVideoTracks();
@@ -322,8 +394,78 @@ bool webPreviewIsMirrored() {
 
 bool webIsAppleMobile() => _isAppleMobileWeb();
 
-void applyWebVideoPreviewStyle({required double zoom}) {
-  final z = zoom.isFinite ? zoom.clamp(1.0, 8.0) : 1.0;
+/// Keep the preview playing inline.
+///
+/// mobile_scanner never sets `playsinline`, and Safari on iPhone refuses to
+/// play a video element inline without it — the stream is live but the element
+/// never produces frames, so every decoder sees nothing at all.
+void ensureWebVideoPlaysInline() {
+  try {
+    final videos = _document.callMethod('querySelectorAll'.toJS, 'video'.toJS);
+    if (videos == null) return;
+    final list = videos as JSObject;
+    final length = _jsLength(list);
+    for (var i = 0; i < length; i++) {
+      final video = list.callMethod('item'.toJS, i.toJS);
+      if (video == null) continue;
+      final jsVideo = video as JSObject;
+      if (jsVideo.getProperty('srcObject'.toJS) == null) continue;
+
+      jsVideo
+        ..setProperty('playsInline'.toJS, true.toJS)
+        ..setProperty('muted'.toJS, true.toJS)
+        ..setProperty('autoplay'.toJS, true.toJS);
+      jsVideo.callMethodVarArgs(
+        'setAttribute'.toJS,
+        <JSAny>['playsinline'.toJS, 'true'.toJS],
+      );
+      jsVideo.callMethodVarArgs(
+        'setAttribute'.toJS,
+        <JSAny>['webkit-playsinline'.toJS, 'true'.toJS],
+      );
+
+      if (jsVideo.getProperty('paused'.toJS)?.dartify() != true) continue;
+      final played = jsVideo.callMethod('play'.toJS);
+      if (played == null) continue;
+      // A rejected play() is expected while the tab is backgrounded.
+      unawaited((played as JSPromise).toDart.catchError((Object _) => null));
+    }
+  } catch (_) {}
+}
+
+/// CSS digital zoom for browsers that cannot drive the camera zoom constraint.
+/// 1.0 is identity; 2.0 magnifies the center of the live preview.
+double _cssZoom = 1.0;
+
+/// Optical / digital zoom via MediaTrackConstraints when the camera exposes
+/// a `zoom` capability (Chrome on many Android phones).
+///
+/// [multiplier] is 1.0 / 2.0 / 3.0. Returns false when the track cannot be
+/// zoomed, so callers can fall back to CSS + decode-crop magnification.
+Future<bool> setWebZoomMultiplier(double multiplier) async {
+  final factor = multiplier <= 1.0 ? 1.0 : (multiplier <= 2.0 ? 2.0 : 3.0);
+  // Map 1x→0, 2x→0.5, 3x→1.0 across the camera's allowed zoom range.
+  final t = ((factor - 1.0) / 2.0).clamp(0.0, 1.0);
+  var changed = false;
+  for (final track in _focusableTracks()) {
+    final caps = _capabilitiesOf(track);
+    final zoom = caps?['zoom'];
+    if (zoom is! Map) continue;
+    final min = zoom['min'];
+    final max = zoom['max'];
+    if (min is! num || max is! num || max <= min) continue;
+    final target =
+        (min.toDouble() + (max.toDouble() - min.toDouble()) * t)
+            .clamp(min.toDouble(), max.toDouble());
+    var ok = await _applyAdvanced(track, {'zoom': target});
+    ok = ok || await _applyIdeal(track, {'zoom': target});
+    changed = changed || ok;
+  }
+  return changed;
+}
+
+void applyWebVideoPreviewStyle({double? cssZoom}) {
+  if (cssZoom != null) _cssZoom = cssZoom <= 1.0 ? 1.0 : cssZoom;
   try {
     final videos = _document.callMethod('querySelectorAll'.toJS, 'video'.toJS);
     if (videos == null) return;
@@ -338,12 +480,25 @@ void applyWebVideoPreviewStyle({required double zoom}) {
       final style = jsVideo.getProperty('style'.toJS);
       if (style == null) continue;
       final jsStyle = style as JSObject;
+      final scale = _cssZoom;
       // Replace plugin CSS (scaleX(-1)) so Flutter Transform is not needed.
-      jsStyle.setProperty('transform'.toJS, 'scale($z, $z)'.toJS);
+      // CSS scale is the web 1x/2x control: MediaTrack zoom is unsupported
+      // on most laptop webcams.
+      jsStyle.setProperty(
+        'transform'.toJS,
+        (scale <= 1.0 ? 'none' : 'scale($scale)').toJS,
+      );
       jsStyle.setProperty('transformOrigin'.toJS, 'center center'.toJS);
       jsStyle.setProperty('objectFit'.toJS, 'cover'.toJS);
       jsStyle.setProperty('width'.toJS, '100%'.toJS);
       jsStyle.setProperty('height'.toJS, '100%'.toJS);
+      final parent = jsVideo.getProperty('parentElement'.toJS);
+      if (parent != null) {
+        final parentStyle = (parent as JSObject).getProperty('style'.toJS);
+        if (parentStyle != null) {
+          (parentStyle as JSObject).setProperty('overflow'.toJS, 'hidden'.toJS);
+        }
+      }
     }
   } catch (_) {}
 }

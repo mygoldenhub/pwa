@@ -36,6 +36,16 @@ class BarcodeNormalize {
     return keys.toList();
   }
 
+  /// True for raw values that look like retail 1D product codes (EAN/UPC/GTIN).
+  static bool looksLikeProductBarcode(String raw) {
+    final digits = digitsOnly(raw);
+    if (digits.isEmpty || digits.length != raw.trim().length) return false;
+    return digits.length == 8 ||
+        digits.length == 12 ||
+        digits.length == 13 ||
+        digits.length == 14;
+  }
+
   /// Preferred display / primary lookup value (GTIN-14 when available).
   static String? primary(String raw) {
     final keys = lookupKeys(raw);

@@ -198,11 +198,6 @@ class _ProductFormPageState extends State<ProductFormPage> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: AppSpacing.md),
-                  Text(
-                    'Tip: later we can wire this to barcode scanning and a real backend.',
-                    style: Theme.of(context).textTheme.bodySmall?.withColor(cs.onSurfaceVariant),
-                  ),
                 ],
               ),
             ),

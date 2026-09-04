@@ -4,28 +4,25 @@ import 'dart:ui';
 class WebBarcodePoller {
   bool get isRunning => false;
 
-  Future<bool> get isSupported async => false;
-
   void setScanRegion({
     required Size previewSize,
     required Rect cropInPreview,
-    double previewZoom = 1.0,
+    double decodeMagnify = 1.0,
   }) {}
 
   void start({
     required void Function(String value) onCode,
     Size? previewSize,
     Rect? cropInPreview,
-    double previewZoom = 1.0,
-    Duration interval = const Duration(milliseconds: 150),
+    double decodeMagnify = 1.0,
+    Duration interval = const Duration(milliseconds: 80),
+  }) {}
+
+  void updateRegion({
+    required Size previewSize,
+    required Rect cropInPreview,
+    double decodeMagnify = 1.0,
   }) {}
 
   void stop() {}
 }
-
-Future<String?> detectFromActiveVideo({
-  Size previewSize = Size.zero,
-  Rect cropInPreview = Rect.zero,
-  double previewZoom = 1.0,
-}) async =>
-    null;

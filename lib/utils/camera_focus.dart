@@ -11,18 +11,35 @@ export 'package:pwa/utils/camera_focus_types.dart';
 Future<WebCameraCapabilities> enableContinuousCameraFocus() =>
     impl.enableContinuousCameraFocus();
 
-/// Manual focus (or zoom fallback) at a normalized point (0..1).
+/// Manual focus at a normalized point (0..1).
 Future<bool> focusCameraAt(Offset normalizedPoint) =>
     impl.focusCameraAt(normalizedPoint);
 
-/// Set hardware zoom when supported. [normalized] is 0..1.
-Future<bool> setWebCameraZoom(double normalized) =>
-    impl.setWebCameraZoom(normalized);
+/// Hand the lens back to autofocus, optionally aimed at a normalized point.
+Future<bool> requestWebAutoFocus({Offset? point}) =>
+    impl.requestWebAutoFocus(point: point);
+
+/// The lens positions the camera accepts, or null when it cannot be driven.
+WebFocusRange? webFocusRange() => impl.webFocusRange();
+
+/// Park the lens at an explicit distance.
+Future<bool> setWebFocusDistance(double distance) =>
+    impl.setWebFocusDistance(distance);
 
 /// Set flashlight when the browser camera supports torch constraints.
 Future<bool> setWebTorch(bool enabled) => impl.setWebTorch(enabled);
 
 Future<bool> webTorchSupported() => impl.webTorchSupported();
+
+bool webZoomSupported() => impl.webZoomSupported();
+
+double? webZoomLevel() => impl.webZoomLevel();
+
+Future<bool> setWebZoom(double level) => impl.setWebZoom(level);
+
+/// Zoom by 1x / 2x using the camera's zoom constraint when it exists.
+Future<bool> setWebZoomMultiplier(double multiplier) =>
+    impl.setWebZoomMultiplier(multiplier);
 
 /// True when the web camera preview is CSS-mirrored (front / desktop cameras).
 bool webPreviewIsMirrored() => impl.webPreviewIsMirrored();
@@ -35,7 +52,10 @@ WebCameraCapabilities probeWebCameraCapabilities() =>
 /// Stop leftover getUserMedia tracks so the camera can start again.
 Future<void> releaseWebCameraTracks() => impl.releaseWebCameraTracks();
 
-/// Zoom / un-mirror the live &lt;video&gt; with CSS.
+/// Un-mirror the live &lt;video&gt; with CSS.
 /// Flutter Transform/ClipRect freeze HtmlElementView in production CanvasKit.
-void applyWebVideoPreviewStyle({required double zoom}) =>
-    impl.applyWebVideoPreviewStyle(zoom: zoom);
+void applyWebVideoPreviewStyle({double? cssZoom}) =>
+    impl.applyWebVideoPreviewStyle(cssZoom: cssZoom);
+
+/// Keep the preview playing inline, which iPhone browsers require explicitly.
+void ensureWebVideoPlaysInline() => impl.ensureWebVideoPlaysInline();

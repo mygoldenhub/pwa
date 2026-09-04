@@ -10,11 +10,23 @@ Future<WebCameraCapabilities> enableContinuousCameraFocus() async {
 
 Future<bool> focusCameraAt(Offset normalizedPoint) async => false;
 
-Future<bool> setWebCameraZoom(double normalized) async => false;
+Future<bool> requestWebAutoFocus({Offset? point}) async => false;
+
+WebFocusRange? webFocusRange() => null;
+
+Future<bool> setWebFocusDistance(double distance) async => false;
 
 Future<bool> setWebTorch(bool enabled) async => false;
 
 Future<bool> webTorchSupported() async => false;
+
+bool webZoomSupported() => false;
+
+double? webZoomLevel() => null;
+
+Future<bool> setWebZoom(double level) async => false;
+
+Future<bool> setWebZoomMultiplier(double multiplier) async => false;
 
 bool webPreviewIsMirrored() => false;
 
@@ -26,4 +38,6 @@ WebCameraCapabilities probeWebCameraCapabilities() {
 
 Future<void> releaseWebCameraTracks() async {}
 
-void applyWebVideoPreviewStyle({required double zoom}) {}
+void applyWebVideoPreviewStyle({double? cssZoom}) {}
+
+void ensureWebVideoPlaysInline() {}
