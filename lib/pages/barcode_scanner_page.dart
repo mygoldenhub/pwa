@@ -53,6 +53,13 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
   int _assistStep = 0;
   Size _previewSize = Size.zero;
 
+  /// Last focus target in normalized camera space (0..1). Updated when a
+  /// barcode's corners are seen so AF locks onto the code, not the room.
+  Offset _focusTarget = const Offset(0.5, 0.45);
+  DateTime _lastFocusAt = DateTime.fromMillisecondsSinceEpoch(0);
+  static const _focusThrottle = Duration(milliseconds: 450);
+  static const _assistInterval = Duration(milliseconds: 1500);
+
   static const _productFormats = <BarcodeFormat>[
     BarcodeFormat.ean13,
     BarcodeFormat.ean8,
@@ -66,8 +73,8 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
       autoStart: false,
       facing: CameraFacing.back,
       detectionSpeed: DetectionSpeed.normal,
-      // Fast polling helps tilted / briefly-in-frame codes on phones.
-      detectionTimeoutMs: kIsWeb ? 300 : 180,
+      // Fast polling: more frames → better chance on tilt / brief blur.
+      detectionTimeoutMs: kIsWeb ? 250 : 120,
       formats: _productFormats,
       // High res on Android; web ignores this and uses the browser stream.
       cameraResolution: kIsWeb ? null : const Size(1920, 1080),
@@ -118,11 +125,35 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
     _assistTimer?.cancel();
     _scanningSince = DateTime.now();
     _assistStep = 0;
-    // Every 3.5s nudge focus / invert if nothing was accepted yet.
-    // Zoom stays manual (1x / 2x / 3x) so it never gets stuck zoomed in.
-    _assistTimer = Timer.periodic(const Duration(milliseconds: 3500), (_) {
+    // Frequent focus assist. Zoom stays manual (1x / 2x / 3x).
+    _assistTimer = Timer.periodic(_assistInterval, (_) {
       unawaited(_runAssistTick());
     });
+    // Immediate first nudge so we don't wait a full interval after open.
+    unawaited(_runAssistTick());
+  }
+
+  Future<void> _requestFocus(Offset point, {bool force = false}) async {
+    if (!mounted || _didReturn || _barcodeFound) return;
+    if (!_controller.value.isRunning) return;
+
+    final now = DateTime.now();
+    if (!force && now.difference(_lastFocusAt) < _focusThrottle) return;
+    _lastFocusAt = now;
+    _focusTarget = Offset(
+      point.dx.clamp(0.05, 0.95),
+      point.dy.clamp(0.05, 0.95),
+    );
+
+    try {
+      if (kIsWeb) {
+        await requestWebAutoFocus(point: _focusTarget);
+      } else {
+        await _controller.setFocusPoint(_focusTarget);
+      }
+    } catch (e) {
+      debugPrint('Focus request failed: $e');
+    }
   }
 
   Future<void> _runAssistTick() async {
@@ -131,20 +162,36 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
 
     _assistStep++;
 
-    // Nudge focus toward the center band (phones + web when supported).
-    try {
-      if (kIsWeb) {
-        await requestWebAutoFocus(point: const Offset(0.5, 0.45));
-      } else {
-        await _controller.setFocusPoint(const Offset(0.5, 0.45));
-      }
-    } catch (_) {}
+    // Prefer last barcode location; otherwise center of the scan guide.
+    await _requestFocus(_focusTarget, force: true);
 
-    // After a few focus nudges with no hit, alternate invert on Android for
-    // reflective / reverse-print codes. Zoom is never changed here.
-    if (!kIsWeb && _assistStep >= 2 && _statusHits == 0) {
+    // Invert only after several failed focus cycles — rebuilding the camera
+    // is costly and should not interrupt early focus settling.
+    if (!kIsWeb && _assistStep >= 4 && _statusHits == 0) {
       await _toggleInvertMode();
     }
+  }
+
+  /// Normalized focus point from barcode corners in the capture image, or null.
+  Offset? _focusPointFromBarcode(Barcode barcode, Size captureSize) {
+    if (barcode.corners.length < 2) return null;
+    if (captureSize.width <= 0 || captureSize.height <= 0) return null;
+
+    var sumX = 0.0;
+    var sumY = 0.0;
+    for (final c in barcode.corners) {
+      sumX += c.dx;
+      sumY += c.dy;
+    }
+    final cx = sumX / barcode.corners.length;
+    final cy = sumY / barcode.corners.length;
+
+    // Corners from ML Kit / Vision are in the camera image coordinate space.
+    final nx = cx / captureSize.width;
+    final ny = cy / captureSize.height;
+    if (nx.isNaN || ny.isNaN) return null;
+    if (nx < 0 || nx > 1.2 || ny < 0 || ny > 1.2) return null;
+    return Offset(nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0));
   }
 
   Future<void> _toggleInvertMode() async {
@@ -202,6 +249,13 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
         await _controller.setZoomScale(_nativeZoomScale(_previewZoom));
       } catch (_) {}
     }
+    // Kick continuous / center AF as soon as the stream is live.
+    if (kIsWeb) {
+      try {
+        await enableContinuousCameraFocus();
+      } catch (_) {}
+    }
+    await _requestFocus(_focusTarget, force: true);
   }
 
   Future<void> _ensureCameraStarted() async {
@@ -271,6 +325,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
       _statusHits = 0;
       _barcodeFound = false;
       _invertImage = false;
+      _focusTarget = const Offset(0.5, 0.45);
     });
     _statusIdleTimer?.cancel();
     _voter.reset();
@@ -319,6 +374,17 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
 
   void _onDetect(BarcodeCapture capture) {
     if (_didReturn) return;
+
+    // Lock AF onto any seen barcode (even before a valid decode) so the next
+    // frames are sharper — critical for GS1-128 / distant / hazy labels.
+    for (final barcode in capture.barcodes) {
+      final point = _focusPointFromBarcode(barcode, capture.size);
+      if (point != null) {
+        unawaited(_requestFocus(point));
+        break;
+      }
+    }
+
     for (final barcode in capture.barcodes) {
       for (final raw in BarcodeScanDecode.candidates(barcode)) {
         if (_considerDecoded(raw)) return;
@@ -363,11 +429,12 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
   }
 
   /// Wide center band used only on web to upscale 1D bars. Not a UI frame.
+  /// Tall enough for GS1-128 labels; wide enough for distant EAN/UPC.
   Rect _webDecodeRectFor(Size size) {
     return Rect.fromCenter(
       center: Offset(size.width / 2, size.height * 0.45),
-      width: (size.width * 0.94).clamp(1.0, size.width),
-      height: (size.height * 0.42).clamp(1.0, size.height),
+      width: (size.width * 0.96).clamp(1.0, size.width),
+      height: (size.height * 0.52).clamp(1.0, size.height),
     );
   }
 
@@ -384,7 +451,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
       },
       previewSize: size,
       cropInPreview: crop,
-      interval: const Duration(milliseconds: 100),
+      interval: const Duration(milliseconds: 80),
     );
   }
 
@@ -531,12 +598,15 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage>
   String? get _assistHint {
     if (_barcodeFound || _lastError != null) return null;
     final elapsed = DateTime.now().difference(_scanningSince);
-    if (elapsed.inSeconds < 4) return null;
+    if (elapsed.inSeconds < 3) return null;
     if (_invertImage) return 'Trying inverted image for glare / reverse print';
     if (_previewZoom >= 2.0) {
       return 'Hold steady · tap 1x if the barcode is too close';
     }
-    return 'Tip: fill the center with the barcode, or tap 2x if it is far';
+    if (_statusHits > 0) {
+      return 'Almost there · hold steady while focus locks';
+    }
+    return 'Tip: fill the guide with the barcode, tap to focus, or try 2x if far';
   }
 
   @override

@@ -134,8 +134,8 @@ class _CropDecoder {
 
   static final _CropDecoder instance = _CropDecoder._();
 
-  static const int _budgetMs = 180;
-  static const double _upscaleTargetWidth = 1800;
+  static const int _budgetMs = 240;
+  static const double _upscaleTargetWidth = 2000;
   static const int _nativeGracePeriod = 40;
   static const String _zxingScriptId = 'mobile-scanner-zxing-wasm';
   static const String _zxingScriptUrl =
@@ -260,10 +260,10 @@ class _CropDecoder {
 
   List<double> _scalesFor(Rect videoCrop) {
     final upscale =
-        (_upscaleTargetWidth / videoCrop.width).clamp(1.0, 4.0).toDouble();
-    if (upscale <= 1.05) return const <double>[1.0];
-    if (upscale <= 2.0) return <double>[1.0, upscale];
-    return <double>[1.0, upscale * 0.65, upscale];
+        (_upscaleTargetWidth / videoCrop.width).clamp(1.0, 4.5).toDouble();
+    if (upscale <= 1.05) return const <double>[1.0, 1.35];
+    if (upscale <= 2.0) return <double>[1.0, 1.4, upscale];
+    return <double>[1.0, upscale * 0.55, upscale * 0.8, upscale];
   }
 
   _DrawnCrop? _drawCrop(JSObject video, Rect videoCrop, double scale) {
