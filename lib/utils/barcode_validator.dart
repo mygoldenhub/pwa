@@ -11,6 +11,7 @@ class BarcodeValidator {
     r'\(\s*01\s*\)\s*([0-9]{13,14})',
     caseSensitive: false,
   );
+  /// AIM symbology identifier, e.g. ]C1 (Code 128) or ]e0 (GS1).
   static final RegExp _aimPrefix = RegExp(r'^\][A-Za-z][0-9]');
   static final RegExp _nonDigits = RegExp(r'\D');
   static final RegExp _gs1HumanAi01 = RegExp(
@@ -19,6 +20,10 @@ class BarcodeValidator {
   );
   static final RegExp _fnc1Text = RegExp(r'\[FNC1\]', caseSensitive: false);
   static final RegExp _gsText = RegExp(r'(\{GS\}|<GS>)', caseSensitive: false);
+  /// Control chars / Scan Kit FNC1 stand-ins often prefix GS1 element strings.
+  static final RegExp _leadingNoise = RegExp(
+    r'^[\x00-\x1F\x7F\u00E8\u00F1\u00F2\u00F3\u00F4]+',
+  );
 
   /// True when [raw] looks like a GS1-128 label carrying GTIN AI 01.
   static bool looksLikeGs1(String raw) {
@@ -33,7 +38,55 @@ class BarcodeValidator {
   static String _preprocessGs1(String text) {
     return text
         .replaceAll(_fnc1Text, '\u001D')
-        .replaceAll(_gsText, '\u001D');
+        .replaceAll(_gsText, '\u001D')
+        .replaceAll(_leadingNoise, '');
+  }
+
+  /// Every distinct string form to try for one scanner emission.
+  ///
+  /// Huawei Scan Kit may return human-readable GS1, an element string, AIM
+  /// prefixes, and/or embedded Group Separator (FNC1) bytes.
+  static List<String> scanCandidates(String raw) {
+    final seen = <String>{};
+    final out = <String>[];
+
+    void add(String? value) {
+      if (value == null) return;
+      final trimmed = value.trim();
+      if (trimmed.isEmpty || seen.contains(trimmed)) return;
+      seen.add(trimmed);
+      out.add(trimmed);
+    }
+
+    final text = raw.trim();
+    add(text);
+    add(_preprocessGs1(text));
+
+    var stripped = text.replaceAll('\u001D', '');
+    stripped = stripped.replaceFirst(_aimPrefix, '');
+    stripped = stripped.replaceAll(_leadingNoise, '');
+    add(stripped);
+    add(_preprocessGs1(stripped));
+
+    // Digit compaction only for GS1-shaped payloads — not for "EAN + junk"
+    // like 9780201379624X, which must stay rejected.
+    if (looksLikeGs1(text) || _aimPrefix.hasMatch(text)) {
+      final digits = text.replaceAll(_nonDigits, '');
+      add(digits);
+      if (digits.startsWith('01') && digits.length >= 16) {
+        add(digits.substring(2, 16));
+      }
+    }
+
+    for (final m in _humanAi01.allMatches(text)) {
+      final g = m.group(1);
+      if (g == null) continue;
+      add(g);
+      add(g.length == 13 ? '0$g' : g);
+      add('(01)$g');
+    }
+
+    return out;
   }
 
   /// Returns a normalized barcode, or `null` if [raw] is not a valid product
@@ -51,6 +104,14 @@ class BarcodeValidator {
   /// digits alone, so 8-digit values are left as-is after check-digit
   /// validation rather than expanded to UPC-A / EAN-13.
   static String? normalize(String raw) {
+    for (final candidate in scanCandidates(raw)) {
+      final normalized = _normalizeOne(candidate);
+      if (normalized != null) return normalized;
+    }
+    return null;
+  }
+
+  static String? _normalizeOne(String raw) {
     final text = _preprocessGs1(raw.trim());
     if (text.isEmpty) return null;
 
@@ -96,7 +157,12 @@ class BarcodeValidator {
 
   /// GTIN-14 from a GS1-128 / GS1 element string, or a bare 14-digit GTIN.
   static String? _extractGtin14(String raw) {
-    final stripped = raw.replaceAll('\u001D', '').replaceFirst(_aimPrefix, '');
+    var stripped = raw.replaceAll('\u001D', '');
+    // Strip every leading AIM prefix (rare double-prefix devices).
+    while (_aimPrefix.hasMatch(stripped)) {
+      stripped = stripped.replaceFirst(_aimPrefix, '');
+    }
+    stripped = stripped.replaceAll(_leadingNoise, '');
 
     final human = _humanAi01.firstMatch(stripped);
     if (human != null) {
@@ -109,7 +175,13 @@ class BarcodeValidator {
     if (digits.startsWith('01') && digits.length >= 16) {
       return digits.substring(2, 16);
     }
+    // Some scanners omit AI "01" and return the 14-digit GTIN alone.
     if (digits.length == 14) return digits;
+    // Or the retail EAN-13 inside a longer noisy payload.
+    if (digits.length > 14 && digits.startsWith('0')) {
+      final gtin14 = digits.substring(0, 14);
+      if (_hasValidCheckDigit(gtin14)) return gtin14;
+    }
     return null;
   }
 

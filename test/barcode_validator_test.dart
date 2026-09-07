@@ -50,6 +50,40 @@ void main() {
       );
     });
 
+    test('extracts GTIN from client GS1-128 example with AI 30 qty', () {
+      expect(
+        BarcodeValidator.normalize('(01)09315021121551(30)0020'),
+        '9315021121551',
+      );
+      expect(
+        BarcodeValidator.normalize('0109315021121551300020'),
+        '9315021121551',
+      );
+      expect(
+        BarcodeValidator.normalize('0109315021121551\u001D300020'),
+        '9315021121551',
+      );
+    });
+
+    test('accepts ScanKit-style GS1 payloads with AIM / FNC1 noise', () {
+      expect(
+        BarcodeValidator.normalize(']C10109315021121551300020'),
+        '9315021121551',
+      );
+      expect(
+        BarcodeValidator.normalize('\u001D0109315021121551\u001D300020'),
+        '9315021121551',
+      );
+      expect(
+        BarcodeValidator.normalize('\u00E80109315021121551300020'),
+        '9315021121551',
+      );
+    });
+
+    test('accepts bare GTIN-14 from GS1 labels', () {
+      expect(BarcodeValidator.normalize('09315021121551'), '9315021121551');
+    });
+
     test('extracts GTIN from a GS1-128 element string', () {
       expect(
         BarcodeValidator.normalize('0109315021121728300012'),

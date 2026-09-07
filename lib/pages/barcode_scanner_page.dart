@@ -22,12 +22,14 @@ class BarcodeScannerPage extends StatefulWidget {
 }
 
 class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
-  /// Retail + GS1-128 (Code 128) only — faster decode than scanning all formats.
+  /// Retail + GS1-128 (Code 128). ITF-14 included for GTIN cartons.
+  /// Code 128 must stay enabled — GS1-128 is Code 128 with FNC1.
   static final int _productFormats = ScanTypes.ean8.bit |
       ScanTypes.ean13.bit |
       ScanTypes.upcCodeA.bit |
       ScanTypes.upcCodeE.bit |
-      ScanTypes.code128.bit;
+      ScanTypes.code128.bit |
+      ScanTypes.itf14.bit;
 
   ScanKitController? _controller;
   StreamSubscription<ScanResult>? _resultSub;
@@ -78,15 +80,19 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
     if (_handled || !mounted) return;
     if (result.isEmpty) return;
 
-    final value = BarcodeValidator.normalize(result.originalValue);
+    final raw = result.originalValue;
+    // GS1-128 (AI 01 + optional AI 30, etc.) — try every Scan Kit string form.
+    final value = BarcodeValidator.normalize(raw);
     if (value == null) {
+      debugPrint(
+        'ScanKit ignored raw="${raw.replaceAll('\u001D', '{GS}')}" '
+        'type=${result.scanType}',
+      );
       // Keep continuous scan running; ignore non-product / bad check-digit reads.
-      if (mounted) {
-        setState(() => _statusValue = null);
-      }
       return;
     }
 
+    debugPrint('ScanKit accepted $value from raw="$raw" type=${result.scanType}');
     _handled = true;
     setState(() => _statusValue = value);
     unawaited(_acceptBarcode(value));
@@ -183,11 +189,14 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
                   child: LayoutBuilder(
                     builder: (context, constraints) {
                       final size = constraints.biggest;
-                      // Wide band favors 1D product codes on packs / reflective wrap.
-                      final box = Rect.fromCenter(
+                      // Guide only — do NOT pass boundingBox to ScanKit.
+                      // The plugin multiplies Flutter logical px by density again,
+                      // which shrinks/offsets the native window and breaks wide
+                      // GS1-128 labels. Full-frame decode is more reliable.
+                      final guide = Rect.fromCenter(
                         center: Offset(size.width / 2, size.height * 0.45),
-                        width: size.width * 0.86,
-                        height: size.height * 0.28,
+                        width: size.width * 0.92,
+                        height: size.height * 0.22,
                       );
                       return Stack(
                         fit: StackFit.expand,
@@ -196,7 +205,6 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
                             controller: _controller!,
                             continuouslyScan: true,
                             format: _productFormats,
-                            boundingBox: box,
                           ),
                           IgnorePointer(
                             child: CustomPaint(
@@ -204,7 +212,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
                                 accent: _statusValue != null
                                     ? const Color(0xFF7CFFB1)
                                     : Colors.white.withValues(alpha: 0.85),
-                                box: box,
+                                box: guide,
                               ),
                             ),
                           ),
@@ -287,7 +295,7 @@ class _ScanStatusBar extends StatelessWidget {
                   Text(
                     found
                         ? value!
-                        : 'Hold steady · tip label to reduce glare on reflective packs',
+                        : 'Fill the guide with the bars · tip pack to cut glare · GS1-128 OK',
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
