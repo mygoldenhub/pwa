@@ -298,24 +298,52 @@ class _ProductsPageState extends State<ProductsPage> {
                 style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
               ),
               const SizedBox(height: AppSpacing.lg),
-              Row(
-                children: [
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: () => Navigator.of(context).pop(true),
-                      icon: Icon(Icons.lock_outline, color: cs.onPrimary),
-                      label: Text('Now', style: TextStyle(color: cs.onPrimary)),
+              // Same fixed size for both buttons and one shared font size for both
+              // labels: shrink only as much as the longer label needs to fit on one line.
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  const gap = AppSpacing.md;
+                  const hPad = 12.0, iconSize = 18.0, iconGap = 8.0, border = 2.0;
+                  final baseStyle = Theme.of(context).textTheme.labelLarge ?? const TextStyle(fontSize: 15);
+                  final textScaler = MediaQuery.textScalerOf(context);
+                  final labelWidth = (constraints.maxWidth - gap) / 2 - hPad * 2 - iconSize - iconGap - border;
+                  final longest = TextPainter(
+                    text: TextSpan(text: 'Account customer', style: baseStyle),
+                    maxLines: 1,
+                    textDirection: TextDirection.ltr,
+                    textScaler: textScaler,
+                  )..layout();
+                  final baseSize = baseStyle.fontSize ?? 15;
+                  final fontSize = longest.width <= labelWidth ? baseSize : baseSize * labelWidth / longest.width;
+                  final labelStyle = baseStyle.copyWith(fontSize: fontSize);
+                  const padding = EdgeInsets.symmetric(horizontal: hPad);
+
+                  return SizedBox(
+                    height: 52,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: () => Navigator.of(context).pop(true),
+                            style: FilledButton.styleFrom(padding: padding),
+                            icon: Icon(Icons.lock_outline, size: iconSize, color: cs.onPrimary),
+                            label: Text('Pay now', maxLines: 1, softWrap: false, overflow: TextOverflow.clip, style: labelStyle.copyWith(color: cs.onPrimary)),
+                          ),
+                        ),
+                        const SizedBox(width: gap),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => Navigator.of(context).pop(false),
+                            style: OutlinedButton.styleFrom(padding: padding),
+                            icon: Icon(Icons.schedule, size: iconSize, color: cs.onSurface),
+                            label: Text('Account customer', maxLines: 1, softWrap: false, overflow: TextOverflow.clip, style: labelStyle.copyWith(color: cs.onSurface)),
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
-                  const SizedBox(width: AppSpacing.md),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () => Navigator.of(context).pop(false),
-                      icon: Icon(Icons.schedule, color: cs.onSurface),
-                      label: Text('Later', style: TextStyle(color: cs.onSurface)),
-                    ),
-                  ),
-                ],
+                  );
+                },
               ),
             ],
           ),
