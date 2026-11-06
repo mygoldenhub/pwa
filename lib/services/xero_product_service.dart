@@ -31,9 +31,11 @@ class XeroProductService {
     Future<List<Map<String, dynamic>>> run(String select) async {
       final from = offset.clamp(0, 1 << 31);
       final to = (from + limit - 1).clamp(from, 1 << 31);
+      // Hide archived items from product-name typeahead (Cart add flow).
       final res = await SupabaseService.from(_table)
           .select(select)
           .ilike('name', like)
+          .not('name', 'ilike', '%[Archived]%')
           .order('name', ascending: true)
           .range(from, to);
       return (res as List).cast<Map<String, dynamic>>();
@@ -76,6 +78,8 @@ class XeroProductService {
       for (final t in tokens) {
         q = q.ilike('name', '%$t%');
       }
+      // Hide archived items from product-name typeahead (Cart add flow).
+      q = q.not('name', 'ilike', '%[Archived]%');
       final from = offset.clamp(0, 1 << 31);
       final to = (from + limit - 1).clamp(from, 1 << 31);
       final res = await q.order('name', ascending: true).range(from, to);
@@ -207,7 +211,7 @@ class XeroProductService {
       final rows = await _safeSearch(containsLike, limit: limit, offset: offset);
       final merged = rows
           .map(XeroProduct.fromRow)
-          .where((p) => p.xeroItemId.isNotEmpty && p.name.trim().isNotEmpty)
+          .where((p) => p.xeroItemId.isNotEmpty && p.name.trim().isNotEmpty && !_isArchivedName(p.name))
           .toList();
 
       // If we consistently get 0 results, it might be because:
@@ -234,7 +238,7 @@ class XeroProductService {
       final rows = await _safeSearchAllTokens(tokens, limit: limit, offset: offset);
       final parsed = rows
           .map(XeroProduct.fromRow)
-          .where((p) => p.xeroItemId.isNotEmpty && p.name.trim().isNotEmpty)
+          .where((p) => p.xeroItemId.isNotEmpty && p.name.trim().isNotEmpty && !_isArchivedName(p.name))
           .toList();
 
       if (parsed.isEmpty) {
@@ -246,6 +250,8 @@ class XeroProductService {
       return [];
     }
   }
+
+  static bool _isArchivedName(String name) => name.contains('[Archived]');
 
   static String _normalizePhraseQuery(String raw) {
     // Keep the user's phrase intact (spaces matter for "exact phrase" intent),
