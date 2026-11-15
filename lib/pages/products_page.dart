@@ -572,10 +572,29 @@ class _ProductsPageState extends State<ProductsPage> {
       appBar: AppImpactHeader(
         title: 'Cart',
         actions: [
-          _HeaderActionButton(
-            label: 'Add product',
-            icon: Icons.add,
-            onTap: _openScanChooser,
+          ListenableBuilder(
+            listenable: widget.appState.auth,
+            builder: (context, _) {
+              final isAdmin = widget.appState.auth.isAdmin;
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (isAdmin) ...[
+                    _HeaderActionButton(
+                      label: 'Admin dashboard',
+                      icon: Icons.admin_panel_settings_outlined,
+                      onTap: () => context.go(AppRoutes.admin),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  _HeaderActionButton(
+                    label: 'Add product',
+                    icon: Icons.add,
+                    onTap: _openScanChooser,
+                  ),
+                ],
+              );
+            },
           ),
         ],
       ),

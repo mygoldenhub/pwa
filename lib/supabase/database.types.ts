@@ -53,6 +53,7 @@ export type Database = {
           id: string
           phone_number: string
           pin_hash: string | null
+          role: number
           updated_at: string
           xero_account_id: string | null
         }
@@ -64,6 +65,7 @@ export type Database = {
           id: string
           phone_number: string
           pin_hash?: string | null
+          role?: number
           updated_at?: string
           xero_account_id?: string | null
         }
@@ -75,6 +77,7 @@ export type Database = {
           id?: string
           phone_number?: string
           pin_hash?: string | null
+          role?: number
           updated_at?: string
           xero_account_id?: string | null
         }

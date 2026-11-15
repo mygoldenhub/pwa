@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/app_state.dart';
+import 'package:pwa/components/account_pending_dialog.dart';
 import 'package:pwa/components/auth_scaffold.dart';
 import 'package:pwa/nav.dart';
+import 'package:pwa/services/auth_service.dart' show AccountPendingApprovalException;
 import 'package:pwa/theme.dart';
 
 class RegisterPage extends StatefulWidget {
@@ -147,6 +149,11 @@ class _RegisterPageState extends State<RegisterPage> {
 
       if (!mounted) return;
       context.go(AppRoutes.cart);
+    } on AccountPendingApprovalException catch (e) {
+      // Account was created but needs admin approval (users.status = 0).
+      if (!mounted) return;
+      await showAccountPendingDialog(context, e.message);
+      if (mounted) context.go(AppRoutes.login);
     } catch (e) {
       debugPrint('Register failed: $e');
       if (!mounted) return;

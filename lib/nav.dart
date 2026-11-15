@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/app_state.dart';
 import 'package:pwa/pages/account_page.dart';
+import 'package:pwa/pages/admin_dashboard_page.dart';
 import 'package:pwa/pages/app_shell_page.dart';
 import 'package:pwa/pages/auth_callback_page.dart';
 import 'package:pwa/pages/barcode_scanner_page.dart';
@@ -51,12 +52,27 @@ class AppRouter {
         final isRecoveryFlow = state.uri.queryParameters['flow'] == 'recovery';
 
         if (!ready && !isLoading) return AppRoutes.loading;
-        if (ready && isLoading) return signedIn ? AppRoutes.cart : AppRoutes.welcome;
+        if (ready && isLoading) {
+          if (!signedIn) return AppRoutes.welcome;
+          return AppRoutes.home(isAdmin: appState.auth.isAdmin);
+        }
+
+        final isAdminRoute = path == AppRoutes.admin || path.startsWith('/admin/');
+        if (isAdminRoute) {
+          if (!signedIn) {
+            return Uri(path: AppRoutes.login, queryParameters: const {'next': AppRoutes.admin}).toString();
+          }
+          if (!appState.auth.isAdmin) return AppRoutes.cart;
+          return null;
+        }
+
         if (!signedIn && isApp) return AppRoutes.welcome;
         // Allow navigating to the New Password page during the recovery flow.
         // Supabase may not reflect a signed-in session immediately in appState, but the UI
         // should still be able to reach this route after OTP verification.
-        if (signedIn && isAuth && !isRecoveryFlow) return AppRoutes.cart;
+        if (signedIn && isAuth && !isRecoveryFlow) {
+          return AppRoutes.home(isAdmin: appState.auth.isAdmin);
+        }
         return null;
       },
       routes: [
@@ -211,6 +227,14 @@ class AppRouter {
           ],
         ),
 
+        GoRoute(
+          path: AppRoutes.admin,
+          pageBuilder: (context, state) => NoTransitionPage(
+            key: const ValueKey('admin-dashboard'),
+            child: AdminDashboardPage(appState: appState),
+          ),
+        ),
+
         // Stripe redirect return page (hosted checkout -> success_url)
         GoRoute(
           path: AppRoutes.stripeCheckoutSuccess,
@@ -244,6 +268,10 @@ class AppRoutes {
     return '$base?discount=${Uri.encodeComponent(discount.toString())}';
   }
   static const String account = '/app/account';
+  static const String admin = '/admin';
+
+  /// Where a signed-in user should land. Admins open the admin panel.
+  static String home({required bool isAdmin}) => isAdmin ? admin : cart;
 
   static const String stripeCheckoutSuccess = '/app/stripe/success';
 

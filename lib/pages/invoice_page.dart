@@ -10,6 +10,7 @@ import 'package:pwa/services/pending_invoice_payment_storage.dart';
 import 'package:pwa/services/stripe_checkout_service.dart';
 import 'package:pwa/services/xero_invoice_service.dart';
 import 'package:pwa/theme.dart';
+import 'package:pwa/utils/app_time.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class InvoicePage extends StatefulWidget {
@@ -705,16 +706,8 @@ class InvoiceCard extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
 
-    String fmtDateTime(DateTime? d) {
-      if (d == null) return '-';
-      final local = d.toLocal();
-      final y = local.year.toString().padLeft(4, '0');
-      final m = local.month.toString().padLeft(2, '0');
-      final day = local.day.toString().padLeft(2, '0');
-      final hh = local.hour.toString().padLeft(2, '0');
-      final mm = local.minute.toString().padLeft(2, '0');
-      return '$y-$m-$day $hh:$mm';
-    }
+    // Supabase times are UTC; show them in the user's (device) timezone.
+    String fmtDateTime(DateTime? d) => AppTime.formatDateTime(d, empty: '-');
 
     final invoiceNum = (invoice.invoiceNum ?? '').trim();
     final reference = (invoice.reference ?? '').trim();

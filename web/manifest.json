@@ -1,11 +1,11 @@
 {
-    "name": "pwa",
-    "short_name": "pwa",
+    "name": "Tile & Stone Trade Supply",
+    "short_name": "Tile & Stone Trade Supply",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Tile & Stone Trade Supply",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

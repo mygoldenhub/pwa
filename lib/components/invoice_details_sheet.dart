@@ -6,6 +6,7 @@ import 'package:pwa/services/pending_invoice_payment_storage.dart';
 import 'package:pwa/services/stripe_checkout_service.dart';
 import 'package:pwa/services/xero_invoice_service.dart';
 import 'package:pwa/theme.dart';
+import 'package:pwa/utils/app_time.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 /// A centered modal dialog that displays invoice details.
@@ -104,23 +105,10 @@ class _InvoiceDetailsDialogState extends State<InvoiceDetailsDialog> {
     }
   }
 
-  String _fmtDateTimeLocal(DateTime? d) {
-    if (d == null) return '-';
-    final local = d.toLocal();
-    final y = local.year.toString().padLeft(4, '0');
-    final m = local.month.toString().padLeft(2, '0');
-    final day = local.day.toString().padLeft(2, '0');
-    final hh = local.hour.toString().padLeft(2, '0');
-    final mm = local.minute.toString().padLeft(2, '0');
-    return '$y-$m-$day $hh:$mm';
-  }
+  /// Supabase times are UTC; show them in the user's (device) timezone.
+  String _fmtDateTimeLocal(DateTime? d) => AppTime.formatDateTime(d, empty: '-');
 
-  DateTime? _parsePaymentDate(dynamic v) {
-    if (v == null) return null;
-    if (v is DateTime) return v;
-    if (v is String) return DateTime.tryParse(v);
-    return null;
-  }
+  DateTime? _parsePaymentDate(dynamic v) => AppTime.parseUtc(v);
 
   double? _asDouble(dynamic v) {
     if (v == null) return null;

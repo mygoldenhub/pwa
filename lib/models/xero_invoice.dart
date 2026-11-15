@@ -1,3 +1,5 @@
+import 'package:pwa/utils/app_time.dart';
+
 class XeroInvoice {
   /// Primary key in `public.invoice`.
   final String invoiceId;
@@ -163,12 +165,8 @@ class XeroInvoice {
     final invoiceId = map['invoice_id']?.toString();
     if (invoiceId == null || invoiceId.isEmpty) return null;
 
-    DateTime? parseDateTime(dynamic v) {
-      if (v == null) return null;
-      if (v is DateTime) return v;
-      if (v is String) return DateTime.tryParse(v);
-      return null;
-    }
+    // Supabase stores UTC; strings without an offset are UTC too (not device-local).
+    DateTime? parseDateTime(dynamic v) => AppTime.parseUtc(v);
 
     /// For fields that are defined as UTC (e.g. `updated_date_utc`).
     ///

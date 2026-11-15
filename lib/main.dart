@@ -41,13 +41,13 @@ class MyApp extends StatelessWidget {
     //     ChangeNotifierProvider(create: (_) => ExampleProvider()),
     //   ],
     //   child: MaterialApp.router(
-    //     title: 'Dreamflow Starter',
+    //     title: 'Tile & Stone Trade Supply',
     //     debugShowCheckedModeBanner: false,
     //     routerConfig: AppRouter.router,
     //   ),
     // );
     return MaterialApp.router(
-      title: 'Dreamflow Starter',
+      title: 'Tile & Stone Trade Supply',
       debugShowCheckedModeBanner: false,
 
       // Theme configuration

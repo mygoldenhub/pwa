@@ -5,6 +5,17 @@ import 'package:pwa/models/app_user.dart';
 import 'package:pwa/supabase/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+/// Thrown when the account exists but `users.status` is 0 (not yet allowed by an admin).
+class AccountPendingApprovalException implements Exception {
+  const AccountPendingApprovalException();
+
+  String get message => 'Please wait for the server to allow access to your account. '
+      'You can log in once an administrator approves it.';
+
+  @override
+  String toString() => message;
+}
+
 class AuthService extends ChangeNotifier {
   static const Duration _authTimeout = Duration(seconds: 20);
 
@@ -161,10 +172,66 @@ class AuthService extends ChangeNotifier {
     }
   }
 
+  Future<void> _signOutQuietly() async {
+    try {
+      await SupabaseConfig.auth.signOut().timeout(_authTimeout);
+    } catch (e) {
+      debugPrint('AuthService: sign-out failed: $e');
+    }
+  }
+
+  /// Reads the caller's `users.status` via the `current_user_status()` RPC (migration 0009).
+  ///
+  /// The RPC is SECURITY DEFINER, so RLS can't hide the row and turn a blocked user into a
+  /// default "allowed" profile. No row (or no session) returns 0. Errors propagate so callers
+  /// fail closed.
+  Future<int> _fetchAccessStatus() async {
+    try {
+      final res = await SupabaseConfig.client.rpc('current_user_status').timeout(_authTimeout);
+      final value = (res is List && res.isNotEmpty) ? res.first : res;
+      final scalar = value is Map && value.length == 1 ? value.values.first : value;
+      if (scalar is num) return scalar.toInt();
+      return int.tryParse(scalar?.toString() ?? '') ?? 0;
+    } on PostgrestException catch (e) {
+      if ((e.code ?? '') == 'PGRST202' || e.message.contains('current_user_status')) {
+        throw Exception(
+          'Account access check is not installed. Run supabase/migrations/0009_lock_unapproved_users.sql in the Supabase SQL editor.',
+        );
+      }
+      rethrow;
+    }
+  }
+
+  /// Loads the profile for an explicit login/sign-up. On any failure, or when the account is not
+  /// approved, the session is ended so the user can never stay signed in.
+  Future<AppUser> _loadApprovedProfile(User supaUser, {String? displayNameHint}) async {
+    final AppUser profile;
+    try {
+      profile = await _loadOrCreateProfile(supaUser, displayNameHint: displayNameHint);
+    } catch (e) {
+      await _signOutQuietly();
+      _currentUser = null;
+      notifyListeners();
+      rethrow;
+    }
+    await _ensureApprovedOrSignOut(profile);
+    return profile;
+  }
+
+  /// Signs out and throws [AccountPendingApprovalException] when [profile] is not approved.
+  Future<void> _ensureApprovedOrSignOut(AppUser profile) async {
+    if (!profile.isPendingApproval) return;
+    await _signOutQuietly();
+    _currentUser = null;
+    notifyListeners();
+    throw const AccountPendingApprovalException();
+  }
+
   bool get isInitialized => _isInitialized;
   bool get isLoading => _isLoading;
   AppUser? get currentUser => _currentUser;
   bool get isSignedIn => _currentUser != null;
+  bool get isAdmin => _currentUser?.isAdmin ?? false;
 
   bool get pinEnabled => _pinEnabled;
   String? get lastEmail => _lastEmail;
@@ -195,19 +262,42 @@ class AuthService extends ChangeNotifier {
         if (_holdProfileUntilPinVerified) return;
 
         try {
-          _currentUser = await _loadOrCreateProfile(supaUser, displayNameHint: null);
+          final profile = await _loadOrCreateProfile(supaUser, displayNameHint: null);
+          // The session may have ended while the profile was loading (e.g. a blocked login
+          // was rejected and signed out). Never publish a stale result.
+          if (SupabaseConfig.auth.currentUser?.id != supaUser.id || _holdProfileUntilPinVerified) return;
+          if (profile.isPendingApproval) {
+            // Never publish an unapproved user. Explicit flows (sign in, sign up) run with
+            // _isLoading set and sign out themselves; otherwise (e.g. access revoked while
+            // signed in, noticed on token refresh) end the session here.
+            _currentUser = null;
+            notifyListeners();
+            if (!_isLoading) await _signOutQuietly();
+            return;
+          }
+          _currentUser = profile;
           _lastEmail = (supaUser.email ?? '').trim().toLowerCase();
           await _savePrefs();
         } catch (e) {
+          // Fail closed: a user whose access couldn't be confirmed is not published.
+          // (An already signed-in user keeps their state through a transient error.)
           debugPrint('AuthService: failed to load profile: $e');
+          if (_currentUser?.id != supaUser.id) _currentUser = null;
         }
         notifyListeners();
       });
 
       final existing = SupabaseConfig.auth.currentUser;
       if (existing != null) {
-        _currentUser = await _loadOrCreateProfile(existing, displayNameHint: null);
-        _lastEmail = (existing.email ?? '').trim().toLowerCase();
+        final profile = await _loadOrCreateProfile(existing, displayNameHint: null);
+        if (profile.isPendingApproval) {
+          // Remembered session for an account that isn't (or is no longer) allowed.
+          await _signOutQuietly();
+          _currentUser = null;
+        } else {
+          _currentUser = profile;
+          _lastEmail = (existing.email ?? '').trim().toLowerCase();
+        }
       }
     } catch (e) {
       debugPrint('AuthService.init failed: $e');
@@ -352,7 +442,7 @@ class AuthService extends ChangeNotifier {
         }
       }
 
-      final profile = await _loadOrCreateProfile(supaUser, displayNameHint: displayName);
+      final profile = await _loadApprovedProfile(supaUser, displayNameHint: displayName);
       _currentUser = profile;
       notifyListeners();
       return profile;
@@ -501,6 +591,7 @@ class AuthService extends ChangeNotifier {
         rethrow;
       }
 
+      await _ensureApprovedOrSignOut(profile);
       _currentUser = profile;
       notifyListeners();
       return profile;
@@ -735,7 +826,9 @@ class AuthService extends ChangeNotifier {
       await _savePrefs();
 
       // Re-load profile (expects edge function already upserted public.users).
-      final profile = await _loadOrCreateProfile(supaUser, displayNameHint: displayName);
+      // New accounts start with status 0: sign out and tell the user to wait for approval.
+      // Local PIN-login prefs above are kept, so PIN login works once approved.
+      final profile = await _loadApprovedProfile(supaUser, displayNameHint: displayName);
       _currentUser = profile;
       notifyListeners();
       return profile;
@@ -789,10 +882,10 @@ class AuthService extends ChangeNotifier {
       final res = await SupabaseConfig.auth.signInWithPassword(email: normalized, password: password).timeout(_authTimeout);
       final supaUser = res.user;
       if (supaUser == null) throw Exception('Sign in failed. Please try again.');
-      final profile = await _loadOrCreateProfile(supaUser, displayNameHint: null);
-      _currentUser = profile;
       _lastEmail = (email.trim()).toLowerCase();
       await _savePasswordForEmail(email: email, password: password);
+      final profile = await _loadApprovedProfile(supaUser);
+      _currentUser = profile;
       await _savePrefs();
       notifyListeners();
       return profile;
@@ -866,9 +959,11 @@ class AuthService extends ChangeNotifier {
           if (!repaired) throw Exception('Incorrect PIN');
         }
 
-        // PIN is correct: publish signed-in state.
-        _holdProfileUntilPinVerified = false;
+        // PIN is correct: check approval before publishing signed-in state.
+        // (The catch below revokes the session if this throws.)
         final profile = await _loadOrCreateProfile(supaUser, displayNameHint: null);
+        if (profile.isPendingApproval) throw const AccountPendingApprovalException();
+        _holdProfileUntilPinVerified = false;
         _currentUser = profile;
         _lastEmail = normalized.toLowerCase();
         _pinEnabled = true;
@@ -1163,7 +1258,13 @@ class AuthService extends ChangeNotifier {
     final supaUser = SupabaseConfig.auth.currentUser;
     if (supaUser == null) return;
     try {
-      _currentUser = await _loadOrCreateProfile(supaUser, displayNameHint: null);
+      final profile = await _loadOrCreateProfile(supaUser, displayNameHint: null);
+      if (profile.isPendingApproval) {
+        await _signOutQuietly();
+        _currentUser = null;
+      } else {
+        _currentUser = profile;
+      }
     } catch (e) {
       debugPrint('AuthService.refreshProfile failed: $e');
     } finally {
@@ -1232,7 +1333,29 @@ class AuthService extends ChangeNotifier {
     }
   }
 
+  int _readRole(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  /// Missing value (column not added yet) counts as allowed, so nobody is locked out
+  /// before migration 0008 runs.
+  int _readStatus(dynamic value) {
+    if (value == null) return 1;
+    if (value is num) return value.toInt();
+    return int.tryParse(value.toString()) ?? 1;
+  }
+
+  /// Profile details from `public.users`, with `status` taken from the server-side
+  /// access check (never from a default).
   Future<AppUser> _loadOrCreateProfile(User supaUser, {required String? displayNameHint}) async {
+    final profile = await _loadOrCreateProfileRow(supaUser, displayNameHint: displayNameHint);
+    final status = await _fetchAccessStatus();
+    return profile.copyWith(status: status);
+  }
+
+  Future<AppUser> _loadOrCreateProfileRow(User supaUser, {required String? displayNameHint}) async {
     final now = DateTime.now().toUtc();
     final email = (supaUser.email ?? '').trim();
     final metaDisplayName = (supaUser.userMetadata?['display_name'] ?? '').toString().trim();
@@ -1262,6 +1385,8 @@ class AuthService extends ChangeNotifier {
           companyName: existingRow['company_name']?.toString(),
           phoneNumber: existingRow['phone_number']?.toString(),
           xeroAccountId: existingRow['xero_account_id']?.toString(),
+          role: _readRole(existingRow['role']),
+          status: _readStatus(existingRow['status']),
           createdAt: DateTime.tryParse(existingRow['created_at']?.toString() ?? '') ?? now,
           updatedAt: DateTime.tryParse(existingRow['updated_at']?.toString() ?? '') ?? now,
         );
@@ -1330,6 +1455,8 @@ class AuthService extends ChangeNotifier {
         companyName: row['company_name']?.toString(),
         phoneNumber: row['phone_number']?.toString(),
         xeroAccountId: row['xero_account_id']?.toString(),
+        role: _readRole(row['role']),
+        status: _readStatus(row['status']),
         createdAt: DateTime.tryParse(row['created_at']?.toString() ?? '') ?? now,
         updatedAt: DateTime.tryParse(row['updated_at']?.toString() ?? '') ?? now,
       );

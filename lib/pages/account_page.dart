@@ -143,6 +143,17 @@ class _AccountPageState extends State<AccountPage> {
                     companyName: (user?.companyName?.trim().isNotEmpty ?? false) ? user!.companyName!.trim() : '—',
                     phoneNumber: (user?.phoneNumber?.trim().isNotEmpty ?? false) ? user!.phoneNumber!.trim() : '—',
                   ),
+                  if (user?.isAdmin ?? false) ...[
+                    const SizedBox(height: AppSpacing.lg),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: () => context.go(AppRoutes.admin),
+                        icon: const Icon(Icons.admin_panel_settings_outlined),
+                        label: const Text('Admin dashboard'),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: AppSpacing.lg),
                   _SectionTitle(title: 'Security'),
                   const SizedBox(height: AppSpacing.sm),

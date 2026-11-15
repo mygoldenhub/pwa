@@ -239,7 +239,9 @@ Deno.serve(async (req: Request) => {
         updated_date_utc: parseDate(invoice.UpdatedDateUTC),
 
         currency_code: invoice.CurrencyCode ?? null,
-        full_paid_on_date: invoice.FullyPaidOnDate ?? null,
+        // Parsed like the other dates (strips Make's " ; UTC"). When missing, the
+        // invoice_fill_full_paid_on_date trigger fills it from the payment date.
+        full_paid_on_date: parseDate(invoice.FullyPaidOnDate),
 
         payments: paymentsForDB(invoice.Payments),
         line_items: lineItemsForDB(invoice.LineItems),

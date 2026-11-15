@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/app_state.dart';
+import 'package:pwa/components/account_pending_dialog.dart';
 import 'package:pwa/components/auth_scaffold.dart';
 import 'package:pwa/nav.dart';
+import 'package:pwa/services/auth_service.dart' show AccountPendingApprovalException;
 import 'package:pwa/theme.dart';
 
 class LoginPage extends StatefulWidget {
@@ -38,6 +40,10 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
+  void _goAfterLogin() {
+    context.go(AppRoutes.home(isAdmin: widget.appState.auth.isAdmin));
+  }
+
   Future<void> _submit() async {
     FocusScope.of(context).unfocus();
     try {
@@ -47,7 +53,7 @@ class _LoginPageState extends State<LoginPage> {
         if (email.isEmpty || !email.contains('@')) throw Exception('Please enter a valid email.');
         if (password.trim().isEmpty) throw Exception('Please enter your password.');
         await widget.appState.auth.signIn(email: email, password: password);
-        if (mounted) context.go(AppRoutes.cart);
+        if (mounted) _goAfterLogin();
         return;
       }
 
@@ -56,7 +62,10 @@ class _LoginPageState extends State<LoginPage> {
       final pin = _pinController.text;
       if (email.isEmpty || !email.contains('@')) throw Exception('Please enter a valid email.');
       await widget.appState.auth.signInWithPin(email: email, pin: pin);
-      if (mounted) context.go(AppRoutes.cart);
+      if (mounted) _goAfterLogin();
+    } on AccountPendingApprovalException catch (e) {
+      // users.status = 0: the account exists but an admin hasn't allowed access.
+      if (mounted) await showAccountPendingDialog(context, e.message);
     } catch (e) {
       debugPrint('Login failed: $e');
       if (!mounted) return;

@@ -14,6 +14,8 @@ create table if not exists public.users (
   xero_account_id text null,
   -- BCrypt hash produced by pgcrypto. Never store raw PINs.
   pin_hash text null,
+  -- Numeric role. Typical value is 0.
+  role integer not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
