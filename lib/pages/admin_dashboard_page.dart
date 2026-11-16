@@ -65,6 +65,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
   String? _error;
   String? _savingUserId;
   String? _formattingUserId;
+  String? _removingUserId;
   String? _savingStatusUserId;
   AdminSection? _loadingSection;
   final Map<AdminSection, Object> _tokens = {};
@@ -287,6 +288,47 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     }
   }
 
+  Future<void> _removeAccount(AdminUserRecord user) async {
+    if (_removingUserId != null) return;
+    final who = user.displayName == '—' ? user.email : user.displayName;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove account?'),
+        content: Text("$who's login and profile will be deleted. This cannot be undone."),
+        actions: [
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.error),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Remove account'),
+          ),
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _removingUserId = user.id);
+    try {
+      await AdminDashboardService.removeUserAccount(user);
+      if (!mounted) return;
+      setState(() => _users = [for (final row in _users) if (row.id != user.id) row]);
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text("$who's account was removed."),
+        ));
+      // Reload so paging and totals stay correct.
+      unawaited(_ensureLoaded(AdminSection.users, force: true));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_message(e))));
+    } finally {
+      if (mounted) setState(() => _removingUserId = null);
+    }
+  }
+
   Future<void> _changeStatus(AdminUserRecord user, int status) async {
     if (user.status == status || _savingStatusUserId != null) return;
     final who = user.displayName == '—' ? user.email : user.displayName;
@@ -444,7 +486,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                         sortColumn: _sorts[_section]?.column,
                         sortAscending: _sorts[_section]?.ascending ?? true,
                         onSort: _loading ? null : _sortBy,
-                        unsortableColumns: _section == AdminSection.users ? const {6} : const {},
+                        unsortableColumns: _section == AdminSection.users ? const {6, 7} : const {},
                         onRowTap: switch (_section) {
                           AdminSection.products => (index) => _openProduct(_products[index]),
                           AdminSection.invoices => (index) => _openInvoice(_invoices[index]),
@@ -598,7 +640,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
 
   List<String> _columnLabels() {
     return switch (_section) {
-      AdminSection.users => const ['Name', 'Email', 'Company', 'Phone', 'Role', 'Status', 'Password'],
+      AdminSection.users => const ['Name', 'Email', 'Company', 'Phone', 'Role', 'Status', 'Password', 'Account'],
       AdminSection.products => const ['Code', 'Name', 'On hand', 'Price', 'Updated'],
       AdminSection.invoices => const ['Number', 'Customer', 'Status', 'Total', 'Due', 'Issued'],
       AdminSection.announcements => const [],
@@ -619,6 +661,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
               _roleControl(user, isSelf: user.id == currentId),
               _statusControl(user, isSelf: user.id == currentId),
               _formatPasswordButton(user, isSelf: user.id == currentId),
+              _removeAccountButton(user, isSelf: user.id == currentId),
             ],
         ];
       case AdminSection.products:
@@ -671,6 +714,28 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     return Align(
       alignment: Alignment.centerLeft,
       child: isSelf ? Tooltip(message: 'Change your own password from Account settings.', child: button) : button,
+    );
+  }
+
+  Widget _removeAccountButton(AdminUserRecord user, {required bool isSelf}) {
+    final busy = _removingUserId == user.id;
+    final error = Theme.of(context).colorScheme.error;
+    final button = OutlinedButton.icon(
+      onPressed: isSelf || _removingUserId != null ? null : () => _removeAccount(user),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: error,
+        side: BorderSide(color: isSelf ? Theme.of(context).disabledColor : error),
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+      ),
+      icon: busy
+          ? SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: error))
+          : const Icon(Icons.person_remove_outlined, size: 16),
+      label: const Text('Remove'),
+    );
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: isSelf ? Tooltip(message: "You can't remove your own account.", child: button) : button,
     );
   }
 

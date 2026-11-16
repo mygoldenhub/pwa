@@ -1,3 +1,6 @@
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
 import 'package:pwa/supabase/supabase_config.dart';
 import 'package:pwa/utils/app_time.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -14,6 +17,9 @@ class AdminUserRecord {
   final int status;
   final DateTime? createdAt;
 
+  /// `users.xero_account_id` (Xero contact id); null when the user isn't linked to Xero.
+  final String? xeroAccountId;
+
   const AdminUserRecord({
     required this.id,
     required this.email,
@@ -23,6 +29,7 @@ class AdminUserRecord {
     required this.role,
     required this.status,
     required this.createdAt,
+    this.xeroAccountId,
   });
 
   AdminUserRecord copyWith({int? role, int? status}) {
@@ -35,6 +42,7 @@ class AdminUserRecord {
       role: role ?? this.role,
       status: status ?? this.status,
       createdAt: createdAt,
+      xeroAccountId: xeroAccountId,
     );
   }
 }
@@ -121,7 +129,7 @@ class AdminDashboardService {
       try {
         final result = await _fetchPage(
           table: 'users',
-          select: 'id, email, display_name, company_name, phone_number, created_at${extra.isEmpty ? '' : ', $extra'}',
+          select: 'id, email, display_name, company_name, phone_number, xero_account_id, created_at${extra.isEmpty ? '' : ', $extra'}',
           orderBy: sortColumn < 0 ? 'created_at' : _pick(columns, sortColumn),
           ascending: sortColumn < 0 ? false : ascending,
           tieBreaker: 'id',
@@ -163,6 +171,55 @@ class AdminDashboardService {
   /// [sortColumn] indexes the display columns: Code, Name, On hand, Price, Updated.
   /// Password that [formatUserPassword] sets; must match migration 0007.
   static const String defaultPassword = '12345678';
+
+  /// Make webhook that removes the user's account in Xero. Responds `true` on success.
+  static const String _removeAccountWebhookUrl = 'https://hook.eu1.make.com/mdrecc2eivgk8m4x3njmk3vjlj263wi4';
+
+  /// Removes a user's account (admin only, enforced in the database).
+  ///
+  /// Users linked to Xero: POST `{id: xero_account_id}` to Make first, and only delete when it
+  /// answers `true`. Then delete the login (auth.users), which cascades to the users row.
+  static Future<void> removeUserAccount(AdminUserRecord user) async {
+    final xeroId = user.xeroAccountId?.trim() ?? '';
+    if (xeroId.isNotEmpty) {
+      final res = await http
+          .post(
+            Uri.parse(_removeAccountWebhookUrl),
+            headers: const {
+              'content-type': 'application/json; charset=utf-8',
+              'accept': 'application/json',
+            },
+            body: jsonEncode({'id': xeroId}),
+          )
+          .timeout(const Duration(seconds: 25));
+      final body = utf8.decode(res.bodyBytes);
+      final ok = res.statusCode >= 200 && res.statusCode < 300 && _isTrueResponse(body);
+      if (!ok) {
+        final shown = body.trim().isEmpty ? 'status ${res.statusCode}' : body.trim();
+        throw 'Xero did not confirm the removal (response: $shown). The account was not removed.';
+      }
+    }
+    await SupabaseConfig.client.rpc('admin_delete_user', params: {'target_user_id': user.id});
+  }
+
+  /// `true` as plain text, JSON `true`/`"true"`, or a JSON object whose result/success/ok/deleted is true.
+  static bool _isTrueResponse(String body) {
+    bool isTrue(dynamic v) => v == true || v?.toString().trim().toLowerCase() == 'true';
+    final text = body.trim();
+    if (isTrue(text)) return true;
+    try {
+      final decoded = jsonDecode(text);
+      if (isTrue(decoded)) return true;
+      if (decoded is Map) {
+        for (final key in decoded.keys) {
+          if (const {'result', 'success', 'ok', 'deleted'}.contains(key.toString().toLowerCase()) && isTrue(decoded[key])) {
+            return true;
+          }
+        }
+      }
+    } catch (_) {}
+    return false;
+  }
 
   /// Resets a user's login password to [defaultPassword] (admin only, enforced in the database).
   static Future<void> formatUserPassword(String userId) async {
@@ -352,6 +409,7 @@ class AdminDashboardService {
       // No status column yet (before migration 0008) means everyone may log in.
       status: row['status'] == null ? 1 : _int(row['status']),
       createdAt: _date(row['created_at']),
+      xeroAccountId: _text(row['xero_account_id'], fallback: '') == '' ? null : _text(row['xero_account_id']),
     );
   }
 
