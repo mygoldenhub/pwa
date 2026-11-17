@@ -126,6 +126,8 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
 
     final payload = await PendingInvoicePaymentStorage.load();
     if (payload == null) return false;
+    // Discount saved by the Pay now flow (local only, never sent to Make).
+    final savedDiscount = payload.remove(PendingInvoicePaymentStorage.discountKey);
 
     setState(() => _postingPayment = true);
     try {
@@ -135,7 +137,8 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
       final invoiceId = (res.invoiceId?.trim().isNotEmpty ?? false) ? res.invoiceId!.trim() : fromPayload;
       _postedPayment = true;
       _paidInvoiceId = (invoiceId == null || invoiceId.isEmpty) ? null : invoiceId;
-      _paidDiscountPercent = res.discountPercent;
+      _paidDiscountPercent = res.discountPercent ??
+          (savedDiscount is num ? savedDiscount.toDouble() : double.tryParse(savedDiscount?.toString() ?? ''));
 
       await PendingInvoicePaymentStorage.clear();
 
@@ -177,6 +180,8 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
       AppRoutes.invoiceSuccess(
         id,
         discount: _paidDiscountPercent ?? _createdDiscountPercent,
+        // Reached only after a completed Stripe payment.
+        paid: true,
       ),
     );
   }

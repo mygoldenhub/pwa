@@ -13,6 +13,7 @@ import 'package:pwa/models/xero_product.dart';
 import 'package:pwa/nav.dart';
 import 'package:pwa/services/cart_service.dart';
 import 'package:pwa/services/invoice_webhook_service.dart';
+import 'package:pwa/services/pending_invoice_payment_storage.dart';
 import 'package:pwa/services/pending_invoice_storage.dart';
 import 'package:pwa/services/stripe_checkout_service.dart';
 import 'package:pwa/services/xero_product_service.dart';
@@ -363,46 +364,22 @@ class _ProductsPageState extends State<ProductsPage> {
     }
   }
 
+  /// Pay now:
+  /// 1) Make creates the Xero invoice first — its response carries the invoice id and the
+  ///    customer's Xero discount %.
+  /// 2) Stripe charges the discounted total + GST (exactly what Xero's invoice shows).
+  /// 3) After payment, the success page posts the saved payload (with `invoice_id`) to Make to
+  ///    mark that invoice paid — the same flow as paying an existing invoice.
+  /// If the customer cancels Stripe, the invoice stays unpaid on their Invoice page.
   Future<void> _startStripeCheckout({required InvoiceDraft draft, required List<CartItem> cartItems}) async {
     final cs = Theme.of(context).colorScheme;
-
-    // Save cart + invoice draft locally so we can create the invoice after
-    // Stripe checkout completes (even after refresh/deep-link).
-    try {
-      final contactId = widget.appState.auth.currentUser?.xeroAccountId?.trim() ?? '';
-      final payload = <String, dynamic>{
-        'reference': draft.reference,
-        'currency_code': draft.currencyCode,
-        'currency_rate': draft.currencyRate,
-        'line_amount_type': InvoiceWebhookService.lineAmountTypeApi(draft.lineAmountType),
-        'date': InvoiceWebhookService.fmtDate(draft.date),
-        'due_date': InvoiceWebhookService.fmtDate(draft.dueDate),
-        'contactID': contactId,
-        'products': cartItems.map((c) {
-          final unitAmount = (c.unitPriceCents ?? 0) / 100.0;
-          return <String, dynamic>{
-            'item': c.productName,
-            'description': c.productName,
-            'quantity': c.quantity,
-            'unit amount': unitAmount,
-          };
-        }).toList(),
-      };
-      await PendingInvoiceStorage.save(payload);
-    } catch (e) {
-      debugPrint('Failed to save pending invoice payload: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            SnackBar(
-              behavior: SnackBarBehavior.floating,
-              showCloseIcon: true,
-              margin: const EdgeInsets.all(AppSpacing.lg),
-              content: const Text('Could not save the cart for payment. Please try again.'),
-            ),
-          );
-      }
+    final contactId = widget.appState.auth.currentUser?.xeroAccountId?.trim() ?? '';
+    if (contactId.isEmpty) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('Missing Xero contactID. Please set users.xero_account_id first.')),
+        );
       return;
     }
 
@@ -425,35 +402,75 @@ class _ProductsPageState extends State<ProductsPage> {
     );
 
     try {
-      final currency = draft.currencyCode;
-      final lineItems = cartItems
-          .where((c) => c.productName.trim().isNotEmpty)
-          .map((c) => (name: c.productName.trim(), unitAmountCents: c.unitPriceCents ?? 0, quantity: c.quantity))
-          .toList();
+      // 1) Create the invoice in Xero (via Make) to learn the invoice id + discount.
+      final uniqueIds = cartItems.map((c) => c.xeroItemId).where((s) => s.trim().isNotEmpty).toSet().toList();
+      final products = await Future.wait(uniqueIds.map(XeroProductService.getByXeroItemId));
+      final productsById = <String, XeroProduct?>{
+        for (var i = 0; i < uniqueIds.length; i++) uniqueIds[i]: products[i],
+      };
+      final createPayload = InvoiceWebhookService.buildCreateInvoicePayload(
+        draft: draft,
+        cartItems: cartItems,
+        productsByItemId: productsById,
+        contactId: contactId,
+      );
+      final created = await InvoiceWebhookService.submitInvoicePayload(createPayload);
+      final invoiceId = created.invoiceId?.trim() ?? '';
+      if (invoiceId.isEmpty) {
+        throw Exception('Invoice was created, but no invoice id was returned from the webhook.');
+      }
+      final discount = created.discountPercent;
+      debugPrint('Pay now: created invoice=$invoiceId discount=$discount');
 
-      // IMPORTANT: Stripe amount must include tax.
-      // This cart flow uses `LineAmountType.exclusive`, so we add GST as a separate line item.
-      final subtotalCents = cartItems.fold<int>(0, (sum, c) => sum + (c.unitPriceCents ?? 0) * c.quantity);
-      final gstCents = (subtotalCents * 0.10).round();
-      final lineItemsWithTax = <({String name, int unitAmountCents, int quantity})>[...lineItems];
-      if (gstCents > 0) {
-        lineItemsWithTax.add((name: 'GST (10%)', unitAmountCents: gstCents, quantity: 1));
+      // 2) Save the "mark paid" payload for after Stripe; drop any old cart-flow payload so the
+      //    success page can't create a second invoice.
+      await PendingInvoiceStorage.clear();
+      await PendingInvoicePaymentStorage.save({
+        ...createPayload,
+        'invoice_id': invoiceId,
+        // Local only — the success page removes it before posting to Make.
+        if (discount != null) PendingInvoicePaymentStorage.discountKey: discount,
+      });
+
+      // The invoice now holds the cart's items.
+      try {
+        await CartService.clearMyCart();
+      } catch (e) {
+        debugPrint('Pay now: failed to clear cart after invoice creation: $e');
       }
 
+      // Tell the customer the invoice exists, so they know they can pay it later.
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(
+              behavior: SnackBarBehavior.floating,
+              showCloseIcon: true,
+              duration: Duration(seconds: 10),
+              margin: EdgeInsets.all(AppSpacing.lg),
+              content: Text(
+                "Your invoice has been created. If you don't pay now, "
+                'you can pay it later from your Invoice page.',
+              ),
+            ),
+          );
+      }
+
+      // 3) Stripe: discounted lines + GST, matching the Xero invoice total.
       final checkoutUrl = await StripeCheckoutService.createHostedCheckoutUrl(
-        currency: currency,
+        currency: draft.currencyCode,
         reference: draft.reference,
-        invoiceId: null,
-        lineItems: lineItemsWithTax,
+        invoiceId: invoiceId,
+        lineItems: StripeCheckoutService.buildDiscountedCartLineItems(
+          cartItems: cartItems,
+          discountPercent: discount,
+        ),
         customerEmail: widget.appState.auth.currentUser?.email,
       );
 
       if (!mounted) return;
       context.pop(); // close loading
-      // IMPORTANT:
-      // Do NOT clear the cart here.
-      // The user has only *started* the payment flow; the invoice is not created
-      // yet and the payment might still fail/cancel.
       await _launchCheckoutUrl(checkoutUrl);
     } catch (e) {
       debugPrint('_startStripeCheckout failed: $e');

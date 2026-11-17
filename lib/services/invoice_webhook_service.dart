@@ -40,10 +40,26 @@ class InvoiceWebhookService {
     required Map<String, XeroProduct?> productsByItemId,
     required String contactId,
   }) async {
+    final payload = buildCreateInvoicePayload(
+      draft: draft,
+      cartItems: cartItems,
+      productsByItemId: productsByItemId,
+      contactId: contactId,
+    );
+    return submitInvoicePayload(payload);
+  }
+
+  /// The "create invoice" payload Make expects (also reused, with `invoice_id`, to mark it paid).
+  static Map<String, dynamic> buildCreateInvoicePayload({
+    required InvoiceDraft draft,
+    required List<CartItem> cartItems,
+    required Map<String, XeroProduct?> productsByItemId,
+    required String contactId,
+  }) {
     if (contactId.trim().isEmpty) throw 'Missing contactID (users.xero_account_id).';
     if (cartItems.isEmpty) throw 'Your cart is empty.';
 
-    final payload = <String, dynamic>{
+    return <String, dynamic>{
       'reference': draft.reference,
       'currency_code': draft.currencyCode,
       'currency_rate': draft.currencyRate,
@@ -77,8 +93,6 @@ class InvoiceWebhookService {
         };
       }).toList(),
     };
-
-    return submitInvoicePayload(payload);
   }
 
   /// Posts an already-shaped payload to the Make webhook.

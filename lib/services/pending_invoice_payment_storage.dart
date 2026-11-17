@@ -11,6 +11,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 class PendingInvoicePaymentStorage {
   static const String _key = 'pending_invoice_payment_payload_v1';
 
+  /// Local-only key holding the Xero discount % (removed before the payload is posted to Make).
+  static const String discountKey = '_local_discount_percent';
+
   static Future<void> save(Map<String, dynamic> payload) async {
     try {
       final prefs = await SharedPreferences.getInstance();

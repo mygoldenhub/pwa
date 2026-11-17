@@ -206,6 +206,7 @@ class AppRouter {
                           child: InvoiceSuccessPage(
                             invoiceId: invoiceId ?? '',
                             discountPercent: discount,
+                            paid: state.uri.queryParameters['paid'] == '1',
                           ),
                         );
                       },
@@ -262,10 +263,13 @@ class AppRoutes {
 
   static const String cart = '/app/cart';
   static const String invoice = '/app/invoice';
-  static String invoiceSuccess(String invoiceId, {num? discount}) {
+  static String invoiceSuccess(String invoiceId, {num? discount, bool paid = false}) {
     final base = '/app/invoice/success/${Uri.encodeComponent(invoiceId)}';
-    if (discount == null) return base;
-    return '$base?discount=${Uri.encodeComponent(discount.toString())}';
+    final query = [
+      if (discount != null) 'discount=${Uri.encodeComponent(discount.toString())}',
+      if (paid) 'paid=1',
+    ];
+    return query.isEmpty ? base : '$base?${query.join('&')}';
   }
   static const String account = '/app/account';
   static const String admin = '/admin';

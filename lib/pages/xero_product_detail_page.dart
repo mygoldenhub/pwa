@@ -247,7 +247,7 @@ class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
                                     await CartService.addOrIncrementXeroProduct(product: p, quantity: _quantity);
                                     if (!context.mounted) return;
                                     ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text('Added "${p.name}" ├ù $_quantity')),
+                                      SnackBar(content: Text('Added "${p.name}" × $_quantity')),
                                     );
                                     _close();
                                   } catch (e) {

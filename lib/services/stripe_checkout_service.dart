@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:pwa/models/cart_item.dart';
 import 'package:pwa/models/xero_invoice.dart';
 import 'package:pwa/supabase/supabase_config.dart';
 
@@ -88,6 +89,42 @@ class StripeCheckoutService {
     return (v == null || v.isEmpty) ? 'Line item' : v;
   }
 
+  /// Stripe line items for a cart, with the customer's Xero discount applied the way Xero does it
+  /// (Tax Exclusive invoices):
+  /// - each line = unit price × quantity × (1 − discount%), rounded to cents
+  /// - GST = 10% of each discounted line, rounded per line, added as one "GST (10%)" line.
+  ///
+  /// e.g. 48.07 with 15% off → 40.86, GST 4.09, total 44.95.
+  /// Each line is sent as quantity 1 with the full line amount so Stripe's total matches Xero exactly.
+  static List<({String name, int unitAmountCents, int quantity})> buildDiscountedCartLineItems({
+    required List<CartItem> cartItems,
+    double? discountPercent,
+    double gstRate = 0.10,
+  }) {
+    final discount = (discountPercent == null || discountPercent <= 0 || discountPercent >= 100) ? 0.0 : discountPercent;
+    final multiplier = 1 - discount / 100;
+    final discountLabel = discount == 0
+        ? ''
+        : ' (${discount == discount.roundToDouble() ? discount.toInt() : discount}% discount)';
+
+    final items = <({String name, int unitAmountCents, int quantity})>[];
+    var gstCents = 0;
+    for (final c in cartItems) {
+      final name = c.productName.trim();
+      final unitCents = c.unitPriceCents ?? 0;
+      if (name.isEmpty || unitCents <= 0 || c.quantity <= 0) continue;
+      final lineCents = (unitCents * c.quantity * multiplier).round();
+      if (lineCents <= 0) continue;
+      gstCents += (lineCents * gstRate).round();
+      final title = c.quantity > 1 ? '$name × ${c.quantity}' : name;
+      items.add((name: '$title$discountLabel', unitAmountCents: lineCents, quantity: 1));
+    }
+    if (gstCents > 0) {
+      items.add((name: 'GST (${(gstRate * 100).round()}%)', unitAmountCents: gstCents, quantity: 1));
+    }
+    return items;
+  }
+
   /// Builds Stripe Checkout line items from a Xero invoice.
   ///
   /// Stripe quantities must be integers; fractional quantities are rounded.
@@ -105,9 +142,16 @@ class StripeCheckoutService {
       final totalRaw = _asDouble(li['line_amount'] ?? li['LineAmount'] ?? li['lineAmount']);
 
       final qty = (qtyRaw == null || qtyRaw <= 0) ? 1 : qtyRaw.round();
-      double unitAmount = (unitRaw ?? 0).toDouble();
-      if (unitAmount <= 0 && totalRaw != null && qty > 0) unitAmount = totalRaw / qty;
 
+      // Xero's LineAmount is after the customer's discount; UnitAmount is the list price.
+      // Charge the line amount (as one line) so discounted invoices aren't overcharged.
+      if (totalRaw != null && totalRaw > 0) {
+        final cents = (totalRaw * 100).round();
+        items.add((name: qty > 1 ? '$title × $qty' : title, unitAmountCents: cents, quantity: 1));
+        continue;
+      }
+
+      final unitAmount = (unitRaw ?? 0).toDouble();
       final cents = (unitAmount * 100).round();
       if (cents <= 0) continue;
       items.add((name: title, unitAmountCents: cents, quantity: qty));

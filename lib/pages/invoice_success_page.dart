@@ -9,10 +9,15 @@ class InvoiceSuccessPage extends StatefulWidget {
   final String invoiceId;
   final double? discountPercent;
 
+  /// True when the customer just paid this invoice with Stripe (Pay now): the header reads
+  /// "Successfully paid" instead of "Invoice created".
+  final bool paid;
+
   const InvoiceSuccessPage({
     super.key,
     required this.invoiceId,
     this.discountPercent,
+    this.paid = false,
   });
 
   @override
@@ -615,7 +620,7 @@ class _InvoiceSuccessPageState extends State<InvoiceSuccessPage> {
                               const SizedBox(width: 12),
                               Expanded(
                                 child: Text(
-                                  'Invoice created',
+                                  widget.paid ? 'Successfully paid' : 'Invoice created',
                                   style: Theme.of(context)
                                       .textTheme
                                       .titleLarge
