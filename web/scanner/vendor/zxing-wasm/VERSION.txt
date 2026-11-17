@@ -1,0 +1,1 @@
+zxing-wasm 3.1.6 (reader build) — https://github.com/Sec-ant/zxing-wasm — self-hosted for the PWA scanner.

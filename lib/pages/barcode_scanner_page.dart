@@ -7,6 +7,7 @@ import 'package:flutter_scankit/flutter_scankit.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/components/app_header.dart';
 import 'package:pwa/nav.dart';
+import 'package:pwa/services/web_barcode_engine.dart';
 import 'package:pwa/theme.dart';
 import 'package:pwa/utils/barcode_validator.dart';
 
@@ -98,6 +99,15 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
     unawaited(_acceptBarcode(value));
   }
 
+  /// PWA path: [value] is already normalized by [BarcodeValidator].
+  void _onWebBarcode(String value) {
+    if (_handled || !mounted) return;
+    debugPrint('Web scanner accepted $value');
+    _handled = true;
+    setState(() => _statusValue = value);
+    unawaited(_acceptBarcode(value));
+  }
+
   Future<void> _acceptBarcode(String value) async {
     HapticFeedback.mediumImpact();
     // Pause continuous decode before leaving (Android).
@@ -180,9 +190,15 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
         ],
       ),
       body: !_isMobileNative
-          ? _UnsupportedPlatform(
-              onClose: _leaveToCart,
-            )
+          ? (kIsWeb
+              // PWA / phone browser: Scan Kit can't run here, so use the web engine.
+              ? _WebScanner(
+                  statusValue: _statusValue,
+                  onBarcode: _onWebBarcode,
+                )
+              : _UnsupportedPlatform(
+                  onClose: _leaveToCart,
+                ))
           : Column(
               children: [
                 Expanded(
@@ -309,6 +325,272 @@ class _ScanStatusBar extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// PWA scanner: live camera (browser BarcodeDetector → zxing-wasm) plus a "Take photo"
+/// mode that uses the phone's own camera app for difficult, shiny labels.
+class _WebScanner extends StatefulWidget {
+  const _WebScanner({required this.statusValue, required this.onBarcode});
+
+  final String? statusValue;
+
+  /// Called once with a validated, normalized barcode.
+  final void Function(String value) onBarcode;
+
+  @override
+  State<_WebScanner> createState() => _WebScannerState();
+}
+
+class _WebScannerState extends State<_WebScanner> {
+  /// A live read is accepted once the same code is seen again within this window.
+  static const _confirmWindow = Duration(milliseconds: 1500);
+
+  Object? _video;
+  String? _error;
+  bool _torchSupported = false;
+  bool _torchOn = false;
+  bool _photoBusy = false;
+  bool _done = false;
+  final Map<String, DateTime> _seen = {};
+
+  @override
+  void dispose() {
+    WebBarcodeEngine.stop();
+    super.dispose();
+  }
+
+  Future<void> _startLive() async {
+    final video = _video;
+    if (video == null || _done) return;
+    if (!await WebBarcodeEngine.waitUntilReady()) {
+      if (mounted) setState(() => _error = 'engine');
+      return;
+    }
+    if (!mounted || _done) return;
+    setState(() {
+      _error = null;
+      _torchOn = false;
+    });
+    await WebBarcodeEngine.startLive(video, onCodes: _onLiveCodes, onError: _onLiveError);
+    if (!mounted) return;
+    setState(() => _torchSupported = WebBarcodeEngine.torchSupported());
+  }
+
+  void _onLiveError(String code) {
+    debugPrint('Web scanner camera error: $code');
+    if (mounted) setState(() => _error = code);
+  }
+
+  void _onLiveCodes(List<String> raw) {
+    if (_done || !mounted) return;
+    final now = DateTime.now();
+    for (final r in raw) {
+      final value = BarcodeValidator.normalize(r);
+      if (value == null) {
+        debugPrint('Web scanner ignored raw="$r"');
+        continue;
+      }
+      final previous = _seen[value];
+      _seen[value] = now;
+      // Two matching reads in a row filter out one-off misreads on glare.
+      if (previous != null && now.difference(previous) <= _confirmWindow) {
+        _finish(value);
+        return;
+      }
+    }
+  }
+
+  void _finish(String value) {
+    if (_done) return;
+    _done = true;
+    WebBarcodeEngine.stop();
+    widget.onBarcode(value);
+  }
+
+  /// Must run synchronously from the tap so the browser lets us open the camera app.
+  void _takePhoto() {
+    if (_photoBusy || _done) return;
+    setState(() => _photoBusy = true);
+    final future = WebBarcodeEngine.decodePhoto();
+    unawaited(_handlePhoto(future));
+  }
+
+  Future<void> _handlePhoto(Future<List<String>?> future) async {
+    List<String>? raw;
+    try {
+      raw = await future;
+    } catch (e) {
+      debugPrint('Take photo failed: $e');
+      raw = const [];
+    }
+    if (!mounted) return;
+    setState(() => _photoBusy = false);
+
+    if (raw != null) {
+      for (final r in raw) {
+        final value = BarcodeValidator.normalize(r);
+        if (value != null) {
+          _finish(value);
+          return;
+        }
+      }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            behavior: SnackBarBehavior.floating,
+            content: Text('No barcode found — tilt the pack to move the glare off the bars and try again.'),
+          ),
+        );
+    }
+    // Photo mode stopped the live camera; bring it back.
+    unawaited(_startLive());
+  }
+
+  Future<void> _toggleTorch() async {
+    final next = !_torchOn;
+    final ok = await WebBarcodeEngine.setTorch(next);
+    if (mounted && ok) setState(() => _torchOn = next);
+  }
+
+  String _errorText(String code) {
+    switch (code) {
+      case 'permission':
+        return 'Camera access is blocked. Allow the camera for this site in your browser settings, then reload. '
+            'You can still use Take photo below.';
+      case 'insecure':
+        return 'The camera only works on a secure (https://) connection. You can still use Take photo below.';
+      case 'no-camera':
+        return 'No camera was found. You can still use Take photo below.';
+      case 'busy':
+        return 'The camera is being used by another app. Close it and reopen this page, or use Take photo below.';
+      case 'engine':
+        return 'The scanner could not load. Check your connection and reload the page.';
+      default:
+        return 'The camera could not start. You can still use Take photo below.';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Expanded(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final size = constraints.biggest;
+              final guide = Rect.fromCenter(
+                center: Offset(size.width / 2, size.height * 0.45),
+                width: size.width * 0.92,
+                height: size.height * 0.22,
+              );
+              // No Clip/Transform around the video: it freezes the preview on CanvasKit.
+              return Stack(
+                fit: StackFit.expand,
+                children: [
+                  HtmlElementView.fromTagName(
+                    tagName: 'video',
+                    onElementCreated: (element) {
+                      _video = element;
+                      unawaited(_startLive());
+                    },
+                  ),
+                  IgnorePointer(
+                    child: CustomPaint(
+                      painter: _ScanGuidePainter(
+                        accent: widget.statusValue != null
+                            ? const Color(0xFF7CFFB1)
+                            : Colors.white.withValues(alpha: 0.85),
+                        box: guide,
+                      ),
+                    ),
+                  ),
+                  if (_torchSupported && _error == null)
+                    Positioned(
+                      top: 12,
+                      right: 12,
+                      child: IconButton.filledTonal(
+                        tooltip: _torchOn ? 'Torch on' : 'Torch off',
+                        onPressed: _toggleTorch,
+                        icon: Icon(
+                          _torchOn ? Icons.flashlight_on : Icons.flashlight_off,
+                          color: _torchOn ? Colors.amber : null,
+                        ),
+                      ),
+                    ),
+                  if (_error != null)
+                    Center(
+                      child: Padding(
+                        padding: AppSpacing.paddingXl,
+                        child: Container(
+                          padding: AppSpacing.paddingLg,
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.surface,
+                            borderRadius: BorderRadius.circular(AppRadius.xl),
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.no_photography_outlined, size: 32),
+                              const SizedBox(height: AppSpacing.sm),
+                              Text(
+                                _errorText(_error!),
+                                textAlign: TextAlign.center,
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                              if (_error == 'busy' || (_error?.startsWith('error:') ?? false)) ...[
+                                const SizedBox(height: AppSpacing.md),
+                                OutlinedButton(onPressed: _startLive, child: const Text('Try again')),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+        ),
+        _ScanStatusBar(value: widget.statusValue),
+        SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: Colors.black,
+                    minimumSize: const Size.fromHeight(52),
+                  ),
+                  onPressed: _photoBusy || widget.statusValue != null ? null : _takePhoto,
+                  icon: _photoBusy
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                        )
+                      : const Icon(Icons.photo_camera_outlined),
+                  label: Text(_photoBusy ? 'Reading photo…' : 'Take photo'),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Shiny label? Take a photo — tilt the pack so the glare is off the bars.',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Colors.white.withValues(alpha: 0.7),
+                      ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
