@@ -81,6 +81,9 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
   };
   List<AdminInvoiceRecord> _invoices = [];
   List<AdminAnnouncementRecord> _announcements = [];
+  // Announcements are all loaded at once and paged on the client.
+  static const int _announcementPageSize = 10;
+  int _announcementPage = 0;
   final Set<AdminSection> _loaded = {};
 
   @override
@@ -395,6 +398,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       if (!mounted) return;
       setState(() {
         _announcements = [created, ..._announcements];
+        _announcementPage = 0; // show the new one at the top of page 1
         _titleController.clear();
         _bodyController.clear();
       });
@@ -408,6 +412,23 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
   }
 
   Future<void> _deleteAnnouncement(AdminAnnouncementRecord item) async {
+    final title = item.title.trim().isEmpty ? 'this announcement' : '"${item.title.trim()}"';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete announcement?'),
+        content: Text('$title will be removed for all users. This cannot be undone.'),
+        actions: [
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.error),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
     try {
       await AdminDashboardService.deleteAnnouncement(item.id);
       if (!mounted) return;
@@ -428,35 +449,47 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     final user = widget.appState.auth.currentUser;
     final cs = Theme.of(context).colorScheme;
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF4F4F4),
-      body: Column(
-        children: [
-          _AdminHeader(
-            name: user?.displayName ?? 'Admin',
-            email: user?.email ?? '',
-            section: _section,
-            onSelect: _select,
-            onOpenApp: () => context.go(AppRoutes.cart),
-            onLogout: _signOut,
-          ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: cs.surface,
-                  borderRadius: BorderRadius.circular(AppRadius.lg),
-                  border: Border.all(color: cs.outline.withValues(alpha: 0.12)),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
-                  child: _section == AdminSection.announcements ? _announcementsBody() : _tableBody(),
-                ),
+    final content = Column(
+      children: [
+        _AdminHeader(
+          name: user?.displayName ?? 'Admin',
+          email: user?.email ?? '',
+          section: _section,
+          onSelect: _select,
+          onOpenApp: () => context.go(AppRoutes.cart),
+          onLogout: _signOut,
+        ),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: cs.surface,
+                borderRadius: BorderRadius.circular(AppRadius.lg),
+                border: Border.all(color: cs.outline.withValues(alpha: 0.12)),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+                child: _section == AdminSection.announcements ? _announcementsBody() : _tableBody(),
               ),
             ),
           ),
-        ],
+        ),
+      ],
+    );
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF4F4F4),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          // On short windows the header + toolbar + pager leave no room for the table;
+          // give the page a minimum height and let it scroll vertically instead of overflowing.
+          const minHeight = 560.0;
+          if (!constraints.hasBoundedHeight || constraints.maxHeight >= minHeight) return content;
+          return SingleChildScrollView(
+            child: SizedBox(height: minHeight, child: content),
+          );
+        },
       ),
     );
   }
@@ -518,6 +551,19 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
 
   Widget _announcementsBody() {
     final items = _filteredAnnouncements();
+    final total = items.length;
+    final pageCount = total == 0 ? 1 : (total + _announcementPageSize - 1) ~/ _announcementPageSize;
+    // Clamp so deleting the last item on the last page falls back to the previous page.
+    final page = _announcementPage.clamp(0, pageCount - 1);
+    final pageItems = items.skip(page * _announcementPageSize).take(_announcementPageSize).toList();
+    final pager = total > _announcementPageSize
+        ? _TablePager(
+            page: page,
+            total: total,
+            pageSize: _announcementPageSize,
+            onPage: (p) => setState(() => _announcementPage = p.clamp(0, pageCount - 1)),
+          )
+        : null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -540,36 +586,47 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
               );
               final history = items.isEmpty
                   ? const _EmptyState(message: 'No announcements yet.')
-                  : ListView.separated(
-                      itemCount: items.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 12),
-                      itemBuilder: (context, index) {
-                        final item = items[index];
-                        return _AnnouncementCard(
-                          item: item,
-                          onDelete: () => _deleteAnnouncement(item),
-                        );
-                      },
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(
+                          child: ListView.separated(
+                            key: ValueKey('announcement-page-$page'),
+                            itemCount: pageItems.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: 12),
+                            itemBuilder: (context, index) {
+                              final item = pageItems[index];
+                              return _AnnouncementCard(
+                                item: item,
+                                onDelete: () => _deleteAnnouncement(item),
+                              );
+                            },
+                          ),
+                        ),
+                        if (pager != null) pager,
+                      ],
                     );
               if (constraints.maxWidth < 980) {
                 return ListView(
                   children: [
                     composer,
                     const SizedBox(height: 16),
-                    ...items.map(
+                    ...pageItems.map(
                       (item) => Padding(
                         padding: const EdgeInsets.only(bottom: 12),
                         child: _AnnouncementCard(item: item, onDelete: () => _deleteAnnouncement(item)),
                       ),
                     ),
                     if (items.isEmpty) const SizedBox(height: 120, child: _EmptyState(message: 'No announcements yet.')),
+                    if (pager != null) pager,
                   ],
                 );
               }
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SizedBox(width: 380, child: composer),
+                  // Scrolls when the window is too short for the full composer form.
+                  SizedBox(width: 380, child: SingleChildScrollView(child: composer)),
                   const SizedBox(width: 20),
                   Expanded(child: history),
                 ],
@@ -603,26 +660,33 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            SizedBox(
-              width: 280,
-              child: TextField(
-                controller: _searchController,
-                onChanged: (value) {
-                  setState(() {
-                    _query = value.trim().toLowerCase();
-                    if (_section != AdminSection.announcements) _pageIndex[_section] = 0;
-                  });
-                  if (_section == AdminSection.announcements) return;
-                  _searchDebounce?.cancel();
-                  _searchDebounce = Timer(const Duration(milliseconds: 300), () {
-                    if (mounted) _ensureLoaded(_section, force: true);
-                  });
-                },
-                decoration: InputDecoration(
-                  hintText: searchHint,
-                  prefixIcon: const Icon(Icons.search),
-                  isDense: true,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
+            // Flexible lets the 280px search field shrink on phone widths.
+            Flexible(
+              child: SizedBox(
+                width: 280,
+                child: TextField(
+                  controller: _searchController,
+                  onChanged: (value) {
+                    setState(() {
+                      _query = value.trim().toLowerCase();
+                      if (_section != AdminSection.announcements) {
+                        _pageIndex[_section] = 0;
+                      } else {
+                        _announcementPage = 0;
+                      }
+                    });
+                    if (_section == AdminSection.announcements) return;
+                    _searchDebounce?.cancel();
+                    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+                      if (mounted) _ensureLoaded(_section, force: true);
+                    });
+                  },
+                  decoration: InputDecoration(
+                    hintText: searchHint,
+                    prefixIcon: const Icon(Icons.search),
+                    isDense: true,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
+                  ),
                 ),
               ),
             ),
@@ -827,6 +891,7 @@ class _AdminHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
+    final compact = MediaQuery.sizeOf(context).width < 520;
     return Material(
       color: cs.surface,
       child: DecoratedBox(
@@ -851,7 +916,12 @@ class _AdminHeader extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('Admin Dashboard', style: theme.textTheme.titleLarge?.semiBold),
+                          Text(
+                            'Admin Dashboard',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.titleLarge?.semiBold,
+                          ),
                           Text(
                             email.isEmpty ? name : '$name · $email',
                             maxLines: 1,
@@ -861,17 +931,32 @@ class _AdminHeader extends StatelessWidget {
                         ],
                       ),
                     ),
-                    TextButton.icon(
-                      onPressed: onOpenApp,
-                      icon: const Icon(Icons.open_in_new, size: 18),
-                      label: const Text('Open app'),
-                    ),
-                    const SizedBox(width: 4),
-                    TextButton.icon(
-                      onPressed: onLogout,
-                      icon: const Icon(Icons.logout, size: 18),
-                      label: const Text('Log out'),
-                    ),
+                    // Phone widths: icon-only buttons (same actions, labels as tooltips) so the
+                    // name/email column keeps room instead of being squeezed to nothing.
+                    if (compact) ...[
+                      IconButton(
+                        tooltip: 'Open app',
+                        onPressed: onOpenApp,
+                        icon: const Icon(Icons.open_in_new, size: 18),
+                      ),
+                      IconButton(
+                        tooltip: 'Log out',
+                        onPressed: onLogout,
+                        icon: const Icon(Icons.logout, size: 18),
+                      ),
+                    ] else ...[
+                      TextButton.icon(
+                        onPressed: onOpenApp,
+                        icon: const Icon(Icons.open_in_new, size: 18),
+                        label: const Text('Open app'),
+                      ),
+                      const SizedBox(width: 4),
+                      TextButton.icon(
+                        onPressed: onLogout,
+                        icon: const Icon(Icons.logout, size: 18),
+                        label: const Text('Log out'),
+                      ),
+                    ],
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -1021,7 +1106,11 @@ class _AdminDataTableState extends State<_AdminDataTable> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final width = constraints.maxWidth < _minWidth ? _minWidth : constraints.maxWidth;
+        // Wide tables (users: 8 columns incl. dropdowns/buttons) need more than 1100px so
+        // fixed-width cell controls don't overflow their cells; scroll horizontally instead.
+        final columnMin = widget.columns.length * 170.0;
+        final minWidth = columnMin > _minWidth ? columnMin : _minWidth;
+        final width = constraints.maxWidth < minWidth ? minWidth : constraints.maxWidth;
         return Scrollbar(
           controller: _horizontal,
           thumbVisibility: true,
@@ -1140,8 +1229,7 @@ class _AnnouncementComposer extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             FilledButton.icon(
-              // TEMP: publishing is switched off. Set _announcementPublishEnabled = true to turn it back on.
-              onPressed: (!_announcementPublishEnabled || posting) ? null : onPublish,
+              onPressed: posting ? null : onPublish,
               icon: posting
                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.campaign_outlined),
@@ -1164,33 +1252,99 @@ class _AnnouncementCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(AppRadius.md),
-        border: Border.all(color: cs.outline.withValues(alpha: 0.12)),
+    final radius = BorderRadius.circular(AppRadius.md);
+    // Every card has the same height: 1-line title + 2-line body preview, ellipsized.
+    // Tap opens the full announcement in a modal.
+    return Material(
+      color: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: radius,
+        side: BorderSide(color: cs.outline.withValues(alpha: 0.12)),
       ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 8, 14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => _showAnnouncementDetail(context, item, onDelete),
+        child: SizedBox(
+          height: 120,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 8, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(child: Text(item.title, style: theme.textTheme.titleMedium?.semiBold)),
-                Text(_formatDate(item.createdAt), style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
-                IconButton(
-                  tooltip: 'Delete',
-                  onPressed: onDelete,
-                  icon: const Icon(Icons.delete_outline),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        item.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleMedium?.semiBold,
+                      ),
+                    ),
+                    Text(_formatDate(item.createdAt), style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
+                    IconButton(
+                      tooltip: 'Delete',
+                      onPressed: onDelete,
+                      icon: const Icon(Icons.delete_outline),
+                    ),
+                  ],
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Text(
+                      item.body,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                  ),
                 ),
               ],
             ),
-            Text(item.body, style: theme.textTheme.bodyMedium),
-          ],
+          ),
         ),
       ),
     );
   }
+}
+
+/// Full announcement in a modal (opened from an [_AnnouncementCard]).
+Future<void> _showAnnouncementDetail(BuildContext context, AdminAnnouncementRecord item, VoidCallback onDelete) {
+  final theme = Theme.of(context);
+  return showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      scrollable: true,
+      title: Text(item.title),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              AppTime.formatDateTime(item.createdAt),
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 12),
+            SelectableText(item.body, style: theme.textTheme.bodyMedium),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton.icon(
+          onPressed: () {
+            Navigator.of(dialogContext).pop();
+            onDelete();
+          },
+          icon: const Icon(Icons.delete_outline),
+          label: const Text('Delete'),
+        ),
+        FilledButton(onPressed: () => Navigator.of(dialogContext).pop(), child: const Text('Close')),
+      ],
+    ),
+  );
 }
 
 class _StatusChip extends StatelessWidget {
@@ -1266,36 +1420,40 @@ class _TablePager extends StatelessWidget {
             'Showing $start–$end of $total',
             style: theme.textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
           ),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _PagerButton(
-                label: 'Previous',
-                enabled: safePage > 0,
-                onTap: () => onPage(safePage - 1),
-              ),
-              const SizedBox(width: 6),
-              for (final item in pages) ...[
-                if (item == null)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 4),
-                    child: Text('…'),
-                  )
-                else
-                  _PagerButton(
-                    label: '${item + 1}',
-                    selected: item == safePage,
-                    onTap: () => onPage(item),
-                  ),
-                const SizedBox(width: 4),
+          // Page buttons can be ~450px wide; scroll them horizontally on phone widths.
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _PagerButton(
+                  label: 'Previous',
+                  enabled: safePage > 0,
+                  onTap: () => onPage(safePage - 1),
+                ),
+                const SizedBox(width: 6),
+                for (final item in pages) ...[
+                  if (item == null)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 4),
+                      child: Text('…'),
+                    )
+                  else
+                    _PagerButton(
+                      label: '${item + 1}',
+                      selected: item == safePage,
+                      onTap: () => onPage(item),
+                    ),
+                  const SizedBox(width: 4),
+                ],
+                const SizedBox(width: 2),
+                _PagerButton(
+                  label: 'Next',
+                  enabled: safePage < pageCount - 1,
+                  onTap: () => onPage(safePage + 1),
+                ),
               ],
-              const SizedBox(width: 2),
-              _PagerButton(
-                label: 'Next',
-                enabled: safePage < pageCount - 1,
-                onTap: () => onPage(safePage + 1),
-              ),
-            ],
+            ),
           ),
         ],
       ),
@@ -1743,24 +1901,36 @@ class _MiniTable extends StatelessWidget {
           if (rows.isEmpty)
             Text(emptyText, style: muted)
           else
-            DecoratedBox(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(AppRadius.sm),
-                border: Border.all(color: cs.outline.withValues(alpha: 0.15)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  ColoredBox(
-                    color: cs.surfaceContainerHighest,
-                    child: line(columns, theme.textTheme.labelLarge?.semiBold),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final table = DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(AppRadius.sm),
+                    border: Border.all(color: cs.outline.withValues(alpha: 0.15)),
                   ),
-                  for (var r = 0; r < rows.length; r++) ...[
-                    if (r > 0) Divider(height: 1, color: cs.outline.withValues(alpha: 0.12)),
-                    line(rows[r], theme.textTheme.bodyMedium),
-                  ],
-                ],
-              ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      ColoredBox(
+                        color: cs.surfaceContainerHighest,
+                        child: line(columns, theme.textTheme.labelLarge?.semiBold),
+                      ),
+                      for (var r = 0; r < rows.length; r++) ...[
+                        if (r > 0) Divider(height: 1, color: cs.outline.withValues(alpha: 0.12)),
+                        line(rows[r], theme.textTheme.bodyMedium),
+                      ],
+                    ],
+                  ),
+                );
+                // On phone widths the columns would be squeezed to a few px each;
+                // keep a usable minimum width and scroll horizontally instead.
+                final minWidth = columns.length * 90.0;
+                if (constraints.maxWidth >= minWidth) return table;
+                return SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: SizedBox(width: minWidth, child: table),
+                );
+              },
             ),
         ],
       ),
@@ -1815,9 +1985,6 @@ String _number(dynamic value) {
   return number % 1 == 0 ? number.toInt().toString() : number.toStringAsFixed(2);
 }
 
-/// TEMP: the Broadcast Announcements "Publish" button is disabled until this is set back to true.
-const bool _announcementPublishEnabled = false;
-
 // All times come from Supabase in UTC and are shown in the user's (device) timezone.
 String _formatDateOnly(dynamic value) => AppTime.formatDate(value);
 
@@ -1832,29 +1999,35 @@ class _DetailSection extends StatelessWidget {
     if (entries.isEmpty) return const SizedBox.shrink();
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(title, style: theme.textTheme.titleSmall?.semiBold),
-          const SizedBox(height: 8),
-          for (final (label, value) in entries)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    width: 200,
-                    child: Text(label, style: theme.textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant)),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // 200px label column, but never more than 40% of the dialog on phone widths.
+        final labelWidth = (constraints.maxWidth * 0.4).clamp(0.0, 200.0);
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(title, style: theme.textTheme.titleSmall?.semiBold),
+              const SizedBox(height: 8),
+              for (final (label, value) in entries)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(
+                        width: labelWidth,
+                        child: Text(label, style: theme.textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant)),
+                      ),
+                      Expanded(child: SelectableText(value, style: theme.textTheme.bodyMedium)),
+                    ],
                   ),
-                  Expanded(child: SelectableText(value, style: theme.textTheme.bodyMedium)),
-                ],
-              ),
-            ),
-        ],
-      ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

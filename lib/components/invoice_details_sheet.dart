@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/models/xero_invoice.dart';
@@ -481,7 +483,8 @@ class _LineItemRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
-    return Row(
+    return LayoutBuilder(
+      builder: (context, constraints) => Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Expanded(
@@ -493,9 +496,12 @@ class _LineItemRow extends StatelessWidget {
           ),
         ),
         const SizedBox(width: AppSpacing.md),
+        // Cap the amount column so long amounts wrap instead of overflowing on narrow screens.
         ConstrainedBox(
-          constraints: const BoxConstraints(minWidth: 140),
+          constraints: BoxConstraints(minWidth: 140, maxWidth: math.max(140.0, constraints.maxWidth * 0.55)),
           child: Center(
+            widthFactor: 1,
+            heightFactor: 1,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.center,
@@ -517,6 +523,7 @@ class _LineItemRow extends StatelessWidget {
           ),
         ),
       ],
+      ),
     );
   }
 }
@@ -533,7 +540,8 @@ class _PaymentRow extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
     final ref = (reference ?? '').trim();
-    return Row(
+    return LayoutBuilder(
+      builder: (context, constraints) => Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Expanded(
@@ -543,11 +551,15 @@ class _PaymentRow extends StatelessWidget {
           ),
         ),
         const SizedBox(width: AppSpacing.md),
+        // Min (not fixed) height so larger text scales don't clip; capped width so long
+        // amounts/references ellipsize instead of overflowing on narrow screens.
         ConstrainedBox(
-          constraints: const BoxConstraints(minWidth: 160),
-          child: SizedBox(
-            height: 44,
+          constraints: BoxConstraints(minWidth: 160, maxWidth: math.max(160.0, constraints.maxWidth * 0.6)),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 44),
             child: Center(
+              widthFactor: 1,
+              heightFactor: 1,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.center,
@@ -576,6 +588,7 @@ class _PaymentRow extends StatelessWidget {
           ),
         ),
       ],
+      ),
     );
   }
 }

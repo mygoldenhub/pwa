@@ -522,7 +522,7 @@ class _WebScannerState extends State<_WebScanner> {
                     ),
                   if (_error != null)
                     Center(
-                      child: Padding(
+                      child: SingleChildScrollView(
                         padding: AppSpacing.paddingXl,
                         child: Container(
                           padding: AppSpacing.paddingLg,
@@ -606,7 +606,7 @@ class _UnsupportedPlatform extends StatelessWidget {
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 520),
-        child: Padding(
+        child: SingleChildScrollView(
           padding: AppSpacing.paddingXl,
           child: Container(
             padding: AppSpacing.paddingXl,

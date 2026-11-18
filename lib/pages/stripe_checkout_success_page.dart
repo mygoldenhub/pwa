@@ -207,7 +207,7 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
           Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 520),
-              child: Padding(
+              child: SingleChildScrollView(
                 padding: const EdgeInsets.all(AppSpacing.lg),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,

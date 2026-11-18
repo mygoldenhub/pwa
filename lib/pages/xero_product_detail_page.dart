@@ -304,7 +304,7 @@ class _LookupLoading extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: AppSpacing.paddingLg,
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -374,7 +374,7 @@ class _LookupEmpty extends StatelessWidget {
     final linkStyle = Theme.of(context).textTheme.titleMedium?.semiBold;
 
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: AppSpacing.paddingLg,
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 320),

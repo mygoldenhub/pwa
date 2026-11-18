@@ -6,6 +6,7 @@ import 'package:pwa/app_state.dart';
 import 'package:pwa/components/app_header.dart';
 import 'package:pwa/components/app_modal.dart';
 import 'package:pwa/components/new_invoice_sheet.dart';
+import 'package:pwa/components/notification_bell.dart';
 import 'package:pwa/components/xero_product_name_picker.dart';
 import 'package:pwa/components/quantity_input.dart';
 import 'package:pwa/models/cart_item.dart';
@@ -37,7 +38,9 @@ class _ScanChoiceSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return AppModalSurface(
-      child: Column(
+      // Scrolls instead of overflowing when the window is very short.
+      child: SingleChildScrollView(
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -60,6 +63,7 @@ class _ScanChoiceSheet extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.md),
         ],
+        ),
       ),
     );
   }
@@ -596,6 +600,8 @@ class _ProductsPageState extends State<ProductsPage> {
               return Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  const NotificationBellButton(),
+                  const SizedBox(width: 8),
                   if (isAdmin) ...[
                     _HeaderActionButton(
                       label: 'Admin dashboard',
@@ -670,13 +676,22 @@ class _ProductsPageState extends State<ProductsPage> {
                     final subtotal = (subtotalCents / 100).toStringAsFixed(2);
                     final totalUnits = itemsForSummary.fold<int>(0, (sum, i) => sum + i.quantity);
 
-                    return Column(
+                    return LayoutBuilder(
+                      builder: (context, constraints) => Column(
                       children: [
-                        _CartSummaryCard(
-                          subtotal: subtotal,
-                          distinctCount: itemsForSummary.length,
-                          unitCount: totalUnits,
-                          onCheckout: itemsForSummary.isEmpty ? null : () => _openNewInvoiceSheet(totalBudgetCents: subtotalCents, cartItems: itemsForSummary),
+                        // On very short viewports (e.g. landscape phone with the keyboard open
+                        // while editing a quantity) the summary card scrolls on its own instead
+                        // of overflowing; the widget tree stays identical so focus is kept.
+                        ConstrainedBox(
+                          constraints: BoxConstraints(maxHeight: constraints.maxHeight * 0.6),
+                          child: SingleChildScrollView(
+                            child: _CartSummaryCard(
+                              subtotal: subtotal,
+                              distinctCount: itemsForSummary.length,
+                              unitCount: totalUnits,
+                              onCheckout: itemsForSummary.isEmpty ? null : () => _openNewInvoiceSheet(totalBudgetCents: subtotalCents, cartItems: itemsForSummary),
+                            ),
+                          ),
                         ),
                         const SizedBox(height: AppSpacing.md),
                         Expanded(
@@ -729,6 +744,7 @@ class _ProductsPageState extends State<ProductsPage> {
                           )
                         ),
                       ],
+                      ),
                     );
                   },
                 ),
@@ -1023,30 +1039,23 @@ class _HeaderActionButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Semantics(
-      button: true,
-      label: label,
-      child: GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          curve: Curves.easeOutCubic,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: cs.primary,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: cs.primary.withValues(alpha: 0.22)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 18, color: cs.onPrimary),
-              const SizedBox(width: 8),
-              Text(
-                label,
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(color: cs.onPrimary, fontWeight: FontWeight.w800),
-              ),
-            ],
+    // Icon-only round button (same size as the notification bell); the label is the tooltip.
+    return Tooltip(
+      message: label,
+      child: Semantics(
+        button: true,
+        label: label,
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: cs.primary,
+              shape: BoxShape.circle,
+              border: Border.all(color: cs.primary.withValues(alpha: 0.22)),
+            ),
+            child: Icon(icon, size: 20, color: cs.onPrimary),
           ),
         ),
       ),
@@ -1064,7 +1073,12 @@ class _EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Center(
+    // Centered when it fits; scrolls instead of overflowing on short viewports.
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight, minWidth: constraints.maxWidth),
+          child: Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 420),
         child: Container(
@@ -1105,6 +1119,9 @@ class _EmptyState extends StatelessWidget {
                 label: Text('Add product', style: TextStyle(color: cs.onPrimary)),
               ),
             ],
+          ),
+        ),
+      ),
           ),
         ),
       ),

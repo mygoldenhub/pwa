@@ -94,9 +94,9 @@ class _NewInvoiceSheetState extends State<NewInvoiceSheet> {
     final cs = Theme.of(context).colorScheme;
     final total = (widget.totalBudgetCents / 100).toStringAsFixed(2);
 
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: SingleChildScrollView(
+    // Shown inside a Dialog, which already insets for the on-screen keyboard; adding
+    // viewInsets again here squeezed the form to a few pixels on short screens.
+    return SingleChildScrollView(
         child: Form(
           key: _formKey,
           child: Column(
@@ -180,7 +180,6 @@ class _NewInvoiceSheetState extends State<NewInvoiceSheet> {
             ],
           ),
         ),
-      ),
     );
   }
 }

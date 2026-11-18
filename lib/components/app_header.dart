@@ -50,8 +50,14 @@ class AppImpactHeader extends StatelessWidget implements PreferredSizeWidget {
           child: Row(
             children: [
               if (effectiveLeading != null) ...[effectiveLeading, const SizedBox(width: 10)],
-              _HeaderTitlePill(label: label.isEmpty ? ' ' : label, tone: tone),
-              const Spacer(),
+              // Expanded + Align keeps the pill left-aligned (like a Spacer) but lets a
+              // long title ellipsize instead of pushing the actions off-screen.
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: _HeaderTitlePill(label: label.isEmpty ? ' ' : label, tone: tone),
+                ),
+              ),
               if (actions != null) ...[
                 const SizedBox(width: 8),
                 ...actions!,
@@ -136,11 +142,13 @@ class _HeaderTitlePill extends StatelessWidget {
                   : Icon(icon, color: iconFg, size: 20),
             ),
             const SizedBox(width: 12),
-            Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.titleMedium?.semiBold.copyWith(color: fg, letterSpacing: 0.2),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.titleMedium?.semiBold.copyWith(color: fg, letterSpacing: 0.2),
+              ),
             ),
           ],
         ),

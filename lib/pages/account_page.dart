@@ -457,9 +457,10 @@ class _BottomSheetScaffold extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final bottomPadding = MediaQuery.of(context).viewInsets.bottom;
+    // The keyboard inset is already applied by the surrounding modal
+    // (_showCenteredModal), so it is not added again here.
     return Padding(
-      padding: EdgeInsets.only(left: AppSpacing.lg, right: AppSpacing.lg, bottom: AppSpacing.lg + bottomPadding, top: AppSpacing.md),
+      padding: const EdgeInsets.only(left: AppSpacing.lg, right: AppSpacing.lg, bottom: AppSpacing.lg, top: AppSpacing.md),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,

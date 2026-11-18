@@ -5,6 +5,8 @@ Future<void> showAccountPendingDialog(BuildContext context, String message) {
   return showDialog<void>(
     context: context,
     builder: (context) => AlertDialog(
+      // Lets a long message scroll instead of overflowing on short windows.
+      scrollable: true,
       icon: const Icon(Icons.hourglass_top_rounded, size: 32),
       title: const Text('Waiting for access approval'),
       content: Text(message),

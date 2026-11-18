@@ -103,7 +103,13 @@ class _WelcomePageState extends State<WelcomePage> {
                 const idealHeight = 700.0;
                 final scale = (availableHeight / idealHeight).clamp(0.84, 1.0);
 
-                return Center(
+                // On very short viewports the content can still exceed the
+                // available height even at the minimum scale, so allow scrolling
+                // (while keeping it centered when it fits).
+                return SingleChildScrollView(
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                    child: Center(
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 560),
                     child: Padding(
@@ -138,6 +144,8 @@ class _WelcomePageState extends State<WelcomePage> {
                           ],
                         ),
                       ),
+                    ),
+                  ),
                     ),
                   ),
                 );

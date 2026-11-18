@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:pwa/components/app_modal.dart';
@@ -144,7 +145,10 @@ class _XeroProductNamePickerSheetState extends State<XeroProductNamePickerSheet>
     final screenH = MediaQuery.sizeOf(context).height;
     final viewInsets = MediaQuery.viewInsetsOf(context);
     final availableH = (screenH - viewInsets.bottom).clamp(0.0, screenH);
-    final dialogHeight = (availableH * 0.78).clamp(360.0, screenH * 0.82);
+    // Prefer >= 360px, but never exceed 82% of the screen or the space left inside the
+    // dialog's inset padding (a plain clamp(360, h*0.82) throws when h*0.82 < 360).
+    final maxH = math.max(0.0, math.min(screenH * 0.82, availableH - 2 * AppSpacing.lg));
+    final dialogHeight = math.min(math.max(availableH * 0.78, 360.0), maxH);
 
     return SizedBox(
       height: dialogHeight,
@@ -275,7 +279,10 @@ class _HintPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Container(
+    // Scrolls (instead of overflowing) when the results area is shorter than the hint.
+    return Center(
+      child: SingleChildScrollView(
+        child: Container(
       padding: AppSpacing.paddingLg,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(AppRadius.xl),
@@ -293,6 +300,8 @@ class _HintPanel extends StatelessWidget {
             ),
           ),
         ],
+      ),
+        ),
       ),
     );
   }

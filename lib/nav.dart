@@ -11,6 +11,7 @@ import 'package:pwa/pages/invoice_page.dart';
 import 'package:pwa/pages/invoice_success_page.dart';
 import 'package:pwa/pages/loading_page.dart';
 import 'package:pwa/pages/login_page.dart';
+import 'package:pwa/pages/notifications_page.dart';
 import 'package:pwa/pages/products_page.dart';
 import 'package:pwa/pages/register_page.dart';
 import 'package:pwa/pages/reset_password_page.dart';
@@ -143,6 +144,10 @@ class AppRouter {
                     child: ProductsPage(appState: appState),
                   ),
                   routes: [
+                    GoRoute(
+                      path: 'notifications',
+                      pageBuilder: (context, state) => const MaterialPage(child: NotificationsPage()),
+                    ),
                     GoRoute(
                       path: 'scan',
                       pageBuilder: (context, state) => MaterialPage(
@@ -280,6 +285,7 @@ class AppRoutes {
   static const String stripeCheckoutSuccess = '/app/stripe/success';
 
   static const String barcodeScan = '/app/cart/scan';
+  static const String notifications = '/app/cart/notifications';
   static String barcodeResult(String barcode) =>
       '/app/cart/barcode/${Uri.encodeComponent(barcode)}';
   static const String productNew = '/app/cart/new';
