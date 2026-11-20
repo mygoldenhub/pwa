@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:pwa/supabase/supabase_config.dart';
 import 'package:pwa/utils/app_time.dart';
@@ -90,13 +91,22 @@ class AdminAnnouncementRecord {
   final String title;
   final String body;
   final DateTime? createdAt;
+  /// Empty means the announcement is sent to everyone.
+  final List<String> recipientIds;
+
+  /// First names of the specific recipients, in selection order.
+  final List<String> recipientNames;
 
   const AdminAnnouncementRecord({
     required this.id,
     required this.title,
     required this.body,
     required this.createdAt,
+    this.recipientIds = const [],
+    this.recipientNames = const [],
   });
+
+  bool get sendsToEveryone => recipientIds.isEmpty;
 }
 
 class AdminPage<T> {
@@ -331,30 +341,150 @@ class AdminDashboardService {
   }
 
   static Future<List<AdminAnnouncementRecord>> listAnnouncements() async {
-    final rows = await SupabaseService.select(
-      'announcements',
-      select: 'id, title, body, created_at',
-      orderBy: 'created_at',
-      ascending: false,
-      limit: 200,
-    );
-    return rows.map(_announcementFromRow).toList();
+    try {
+      final rows = await SupabaseService.select(
+        'announcements',
+        select: 'id, title, body, created_at, recipient_ids',
+        orderBy: 'created_at',
+        ascending: false,
+        limit: 200,
+      );
+      return rows.map(_announcementFromRow).toList();
+    } catch (e) {
+      if (!_missingColumn(e)) rethrow;
+      final rows = await SupabaseService.select(
+        'announcements',
+        select: 'id, title, body, created_at',
+        orderBy: 'created_at',
+        ascending: false,
+        limit: 200,
+      );
+      return rows.map(_announcementFromRow).toList();
+    }
+  }
+
+  /// People an admin can address a broadcast to.
+  static Future<List<AdminUserRecord>> listBroadcastRecipients() async {
+    try {
+      final rows = await SupabaseService.select(
+        'users',
+        select: 'id, email, display_name, company_name, phone_number, role, created_at',
+        orderBy: 'display_name',
+        ascending: true,
+        limit: 1000,
+      );
+      return rows.map(_userFromRow).where((user) => user.id.isNotEmpty).toList();
+    } catch (e) {
+      if (!_missingColumn(e)) rethrow;
+      final rows = await SupabaseService.select(
+        'users',
+        select: 'id, email, display_name, company_name, phone_number, created_at',
+        orderBy: 'display_name',
+        ascending: true,
+        limit: 1000,
+      );
+      return rows.map(_userFromRow).where((user) => user.id.isNotEmpty).toList();
+    }
   }
 
   static Future<AdminAnnouncementRecord> createAnnouncement({
     required String title,
     required String body,
     required String createdBy,
+    List<String> recipientIds = const [],
   }) async {
-    final rows = await SupabaseService.insert('announcements', {
+    final audience = recipientIds.where((id) => id.trim().isNotEmpty).toList();
+    final names = await _recipientFirstNames(audience);
+    final payload = <String, dynamic>{
       'title': title,
       'body': body,
       'created_by': createdBy,
-    });
-    if (rows.isEmpty) {
-      return AdminAnnouncementRecord(id: '', title: title, body: body, createdAt: DateTime.now().toUtc());
+      if (audience.isNotEmpty) 'recipient_ids': audience,
+      if (names.isNotEmpty) 'recipient_names': names,
+    };
+    try {
+      return await _insertAnnouncement(payload, audience, names);
+    } catch (e) {
+      if (!_missingColumn(e)) rethrow;
+      if (names.isNotEmpty) {
+        final withoutNames = Map<String, dynamic>.from(payload)..remove('recipient_names');
+        try {
+          return await _insertAnnouncement(withoutNames, audience, names);
+        } catch (retry) {
+          if (audience.isEmpty && _missingColumn(retry)) {
+            return _insertAnnouncement({
+              'title': title,
+              'body': body,
+              'created_by': createdBy,
+            }, audience, names);
+          }
+          rethrow;
+        }
+      }
+      if (audience.isEmpty) {
+        return _insertAnnouncement({
+          'title': title,
+          'body': body,
+          'created_by': createdBy,
+        }, audience, names);
+      }
+      rethrow;
     }
-    return _announcementFromRow(rows.first);
+  }
+
+  static Future<AdminAnnouncementRecord> _insertAnnouncement(
+    Map<String, dynamic> payload,
+    List<String> audience,
+    List<String> names,
+  ) async {
+    final rows = await SupabaseService.insert('announcements', payload);
+    if (rows.isEmpty) {
+      return AdminAnnouncementRecord(
+        id: '',
+        title: (payload['title'] ?? '').toString(),
+        body: (payload['body'] ?? '').toString(),
+        createdAt: DateTime.now().toUtc(),
+        recipientIds: audience,
+        recipientNames: names,
+      );
+    }
+    final record = _announcementFromRow(rows.first);
+    if (record.recipientNames.isNotEmpty || names.isEmpty) return record;
+    return AdminAnnouncementRecord(
+      id: record.id,
+      title: record.title,
+      body: record.body,
+      createdAt: record.createdAt,
+      recipientIds: record.recipientIds.isEmpty ? audience : record.recipientIds,
+      recipientNames: names,
+    );
+  }
+
+  static Future<List<String>> _recipientFirstNames(List<String> ids) async {
+    if (ids.isEmpty) return const [];
+    try {
+      final rows = await SupabaseConfig.client.from('users').select('id, display_name, email').inFilter('id', ids);
+      final byId = <String, String>{};
+      for (final row in rows) {
+        final id = (row['id'] ?? '').toString();
+        if (id.isEmpty) continue;
+        byId[id] = _firstName((row['display_name'] ?? '').toString(), (row['email'] ?? '').toString());
+      }
+      return [
+        for (final id in ids)
+          if ((byId[id] ?? '').isNotEmpty) byId[id]!,
+      ];
+    } catch (e) {
+      debugPrint('Admin dashboard: could not read recipient names: $e');
+      return const [];
+    }
+  }
+
+  static String _firstName(String displayName, String email) {
+    final name = displayName.trim();
+    final source = name.isEmpty || name == '—' ? email.split('@').first.trim() : name;
+    if (source.isEmpty) return '';
+    return source.split(RegExp(r'\s+')).first;
   }
 
   static Future<void> deleteAnnouncement(String id) async {
@@ -462,7 +592,31 @@ class AdminDashboardService {
       title: _text(row['title'], fallback: 'Untitled'),
       body: _text(row['body']),
       createdAt: _date(row['created_at']),
+      recipientIds: _idList(row['recipient_ids']),
+      recipientNames: _idList(row['recipient_names']),
     );
+  }
+
+  static List<String> _idList(dynamic value) {
+    if (value == null) return const [];
+    if (value is List) {
+      return [
+        for (final id in value)
+          if (id != null && id.toString().trim().isNotEmpty && id.toString() != 'null') id.toString(),
+      ];
+    }
+    if (value is String) {
+      final trimmed = value.trim();
+      if (trimmed.isEmpty || trimmed == '{}') return const [];
+      final inner = trimmed.startsWith('{') && trimmed.endsWith('}')
+          ? trimmed.substring(1, trimmed.length - 1)
+          : trimmed;
+      return [
+        for (final part in inner.split(','))
+          if (part.trim().isNotEmpty) part.trim().replaceAll('"', ''),
+      ];
+    }
+    return const [];
   }
 
   static String _contactName(dynamic contact) {

@@ -259,6 +259,31 @@ class NotificationTile extends StatelessWidget {
   }
 }
 
+/// Who the broadcast was posted to, prefixed with "To:".
+class _AudienceBadge extends StatelessWidget {
+  final String label;
+  const _AudienceBadge({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: cs.primaryContainer,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: theme.textTheme.labelMedium?.copyWith(color: cs.onPrimaryContainer, fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+}
+
 /// Shows the full announcement and marks it read.
 Future<void> showNotificationDetail(BuildContext context, AppNotification n) {
   if (!n.isRead) unawaited(NotificationService.markRead(n.id));
@@ -312,6 +337,11 @@ Future<void> showNotificationDetail(BuildContext context, AppNotification n) {
                                 ),
                               ),
                             ],
+                          ),
+                          const SizedBox(height: 8),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: _AudienceBadge(label: n.audienceBadge),
                           ),
                         ],
                       ),

@@ -12,13 +12,31 @@ class AppNotification {
   final DateTime? createdAt;
   final bool isRead;
 
+  /// Empty when the broadcast was posted to everyone.
+  final List<String> recipientNames;
+  final bool sendsToEveryone;
+
   const AppNotification({
     required this.id,
     required this.title,
     required this.body,
     required this.createdAt,
     required this.isRead,
+    this.recipientNames = const [],
+    this.sendsToEveryone = true,
   });
+
+  /// "To: Everyone", or "To:" plus up to three first names, with "..." when there are more.
+  String get audienceBadge {
+    if (sendsToEveryone) return 'To: Everyone';
+    final names = [
+      for (final name in recipientNames)
+        if (name.trim().isNotEmpty) name.trim(),
+    ];
+    if (names.isEmpty) return 'To: Specific people';
+    if (names.length <= 3) return 'To: ${names.join(', ')}';
+    return 'To: ${names.take(3).join(', ')}...';
+  }
 }
 
 /// Broadcast announcements with per-user read state (`announcement_reads`).
@@ -45,7 +63,7 @@ class NotificationService {
     void emit() {
       final rows = announcements;
       if (rows == null || controller.isClosed) return;
-      final list = rows.map((row) {
+      final list = rows.where((row) => _visibleTo(row, userId)).map((row) {
         final id = (row['id'] ?? '').toString();
         return AppNotification(
           id: id,
@@ -53,6 +71,8 @@ class NotificationService {
           body: (row['body'] ?? '').toString(),
           createdAt: AppTime.parseUtc(row['created_at']),
           isRead: readIds.contains(id),
+          sendsToEveryone: _sendsToEveryone(row),
+          recipientNames: _nameList(row['recipient_names']),
         );
       }).toList()
         ..sort((a, b) {
@@ -96,6 +116,46 @@ class NotificationService {
     };
 
     return controller.stream;
+  }
+
+  /// Null or an empty recipient list means the broadcast is for everyone.
+  static bool _sendsToEveryone(Map<String, dynamic> row) {
+    final raw = row['recipient_ids'];
+    if (raw == null) return true;
+    if (raw is List) return raw.isEmpty;
+    if (raw is String) {
+      final trimmed = raw.trim();
+      return trimmed.isEmpty || trimmed == '{}';
+    }
+    return true;
+  }
+
+  static bool _visibleTo(Map<String, dynamic> row, String userId) {
+    if (_sendsToEveryone(row)) return true;
+    final raw = row['recipient_ids'];
+    if (raw is List) return raw.any((id) => id.toString() == userId);
+    return raw.toString().contains(userId);
+  }
+
+  static List<String> _nameList(dynamic value) {
+    if (value is List) {
+      return [
+        for (final name in value)
+          if (name != null && name.toString().trim().isNotEmpty) name.toString().trim(),
+      ];
+    }
+    if (value is String) {
+      final trimmed = value.trim();
+      if (trimmed.isEmpty || trimmed == '{}') return const [];
+      final inner = trimmed.startsWith('{') && trimmed.endsWith('}')
+          ? trimmed.substring(1, trimmed.length - 1)
+          : trimmed;
+      return [
+        for (final part in inner.split(','))
+          if (part.trim().isNotEmpty) part.trim().replaceAll('"', ''),
+      ];
+    }
+    return const [];
   }
 
   static Future<void> markRead(String announcementId) => markAllRead([announcementId]);

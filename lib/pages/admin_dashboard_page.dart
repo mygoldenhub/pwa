@@ -81,6 +81,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
   };
   List<AdminInvoiceRecord> _invoices = [];
   List<AdminAnnouncementRecord> _announcements = [];
+  List<AdminUserRecord> _broadcastPeople = [];
   // Announcements are all loaded at once and paged on the client.
   static const int _announcementPageSize = 10;
   int _announcementPage = 0;
@@ -178,8 +179,17 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
           _rememberPage(section, query, page, result.total);
         case AdminSection.announcements:
           final rows = await AdminDashboardService.listAnnouncements();
+          List<AdminUserRecord> people = _broadcastPeople;
+          try {
+            people = await AdminDashboardService.listBroadcastRecipients();
+          } catch (e) {
+            debugPrint('Admin dashboard: could not load broadcast recipients: $e');
+          }
           if (!_isCurrent(section, token)) return;
-          setState(() => _announcements = rows);
+          setState(() {
+            _announcements = rows;
+            _broadcastPeople = people;
+          });
           _rememberPage(section, '', 0, rows.length);
       }
       _loaded.add(section);
@@ -377,38 +387,61 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     }
   }
 
-  Future<void> _publishAnnouncement() async {
+  Future<bool> _publishAnnouncement(List<String> recipientIds) async {
     final title = _titleController.text.trim();
     final body = _bodyController.text.trim();
     if (title.isEmpty || body.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Enter a title and a message.')),
       );
-      return;
+      return false;
     }
     final createdBy = widget.appState.auth.currentUser?.id ?? '';
-    if (createdBy.isEmpty) return;
+    if (createdBy.isEmpty) return false;
     setState(() => _posting = true);
     try {
       final created = await AdminDashboardService.createAnnouncement(
         title: title,
         body: body,
         createdBy: createdBy,
+        recipientIds: recipientIds,
       );
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(() {
         _announcements = [created, ..._announcements];
         _announcementPage = 0; // show the new one at the top of page 1
         _titleController.clear();
         _bodyController.clear();
       });
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Announcement published.')));
+      final audience = _audienceLabel(created);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Announcement published to $audience.')));
+      return true;
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) return false;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_message(e))));
+      return false;
     } finally {
       if (mounted) setState(() => _posting = false);
     }
+  }
+
+  String _audienceLabel(AdminAnnouncementRecord item) {
+    if (item.sendsToEveryone) return 'Everyone';
+    final names = <String>[
+      for (final id in item.recipientIds) _personName(id),
+    ];
+    if (names.length <= 3) return names.join(', ');
+    return '${names.take(2).join(', ')} +${names.length - 2}';
+  }
+
+  String _personName(String id) {
+    for (final person in _broadcastPeople) {
+      if (person.id == id) {
+        final name = person.displayName.trim();
+        return name.isEmpty || name == '—' ? person.email : name;
+      }
+    }
+    return 'User';
   }
 
   Future<void> _deleteAnnouncement(AdminAnnouncementRecord item) async {
@@ -564,12 +597,23 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
             onPage: (p) => setState(() => _announcementPage = p.clamp(0, pageCount - 1)),
           )
         : null;
+    final historyList = ListView.separated(
+      key: ValueKey('announcement-page-$page'),
+      itemCount: pageItems.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (context, index) {
+        final item = pageItems[index];
+        return _AnnouncementCard(
+          item: item,
+          audience: _audienceLabel(item),
+          onDelete: () => _deleteAnnouncement(item),
+        );
+      },
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _toolbar(count: items.length, searchHint: 'Search announcements'),
-        const SizedBox(height: 12),
-        if (_loading) const LinearProgressIndicator(minHeight: 2),
+        _toolbar(count: items.length, searchHint: 'Search announcements', showLoadingText: false),
         if (_error != null) ...[
           const SizedBox(height: 12),
           _ErrorBanner(message: _error!),
@@ -582,43 +626,21 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                 titleController: _titleController,
                 bodyController: _bodyController,
                 posting: _posting,
+                people: _broadcastPeople,
                 onPublish: _publishAnnouncement,
               );
-              final history = items.isEmpty
-                  ? const _EmptyState(message: 'No announcements yet.')
-                  : Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Expanded(
-                          child: ListView.separated(
-                            key: ValueKey('announcement-page-$page'),
-                            itemCount: pageItems.length,
-                            separatorBuilder: (_, __) => const SizedBox(height: 12),
-                            itemBuilder: (context, index) {
-                              final item = pageItems[index];
-                              return _AnnouncementCard(
-                                item: item,
-                                onDelete: () => _deleteAnnouncement(item),
-                              );
-                            },
-                          ),
-                        ),
-                        if (pager != null) pager,
-                      ],
-                    );
+              final history = _AnnouncementListPane(
+                loading: _loading,
+                itemsEmpty: items.isEmpty,
+                pager: pager,
+                list: historyList,
+              );
               if (constraints.maxWidth < 980) {
                 return ListView(
                   children: [
                     composer,
                     const SizedBox(height: 16),
-                    ...pageItems.map(
-                      (item) => Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: _AnnouncementCard(item: item, onDelete: () => _deleteAnnouncement(item)),
-                      ),
-                    ),
-                    if (items.isEmpty) const SizedBox(height: 120, child: _EmptyState(message: 'No announcements yet.')),
-                    if (pager != null) pager,
+                    SizedBox(height: 360, child: history),
                   ],
                 );
               }
@@ -759,7 +781,10 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
   List<AdminAnnouncementRecord> _filteredAnnouncements() {
     final query = _query;
     if (query.isEmpty) return _announcements;
-    return _announcements.where((item) => item.title.toLowerCase().contains(query) || item.body.toLowerCase().contains(query)).toList();
+    return _announcements.where((item) {
+      final audience = _audienceLabel(item).toLowerCase();
+      return item.title.toLowerCase().contains(query) || item.body.toLowerCase().contains(query) || audience.contains(query);
+    }).toList();
   }
 
   Widget _formatPasswordButton(AdminUserRecord user, {required bool isSelf}) {
@@ -1185,22 +1210,285 @@ class _TableLine extends StatelessWidget {
   }
 }
 
-class _AnnouncementComposer extends StatelessWidget {
+/// Broadcast list with the same dimmed spinner the other admin tabs use.
+class _AnnouncementListPane extends StatelessWidget {
+  final bool loading;
+  final bool itemsEmpty;
+  final Widget? pager;
+  final Widget list;
+
+  const _AnnouncementListPane({
+    required this.loading,
+    required this.itemsEmpty,
+    required this.pager,
+    required this.list,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: itemsEmpty
+              ? (loading ? const SizedBox.shrink() : const _EmptyState(message: 'No announcements yet.'))
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(child: list),
+                    if (pager != null) pager!,
+                  ],
+                ),
+        ),
+        if (loading)
+          Positioned.fill(
+            child: ColoredBox(
+              color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.7),
+              child: const Center(child: _LoadingSpinner()),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _AnnouncementComposer extends StatefulWidget {
   final TextEditingController titleController;
   final TextEditingController bodyController;
   final bool posting;
-  final VoidCallback onPublish;
+  final List<AdminUserRecord> people;
+  final Future<bool> Function(List<String> recipientIds) onPublish;
 
   const _AnnouncementComposer({
     required this.titleController,
     required this.bodyController,
     required this.posting,
+    required this.people,
     required this.onPublish,
   });
 
   @override
+  State<_AnnouncementComposer> createState() => _AnnouncementComposerState();
+}
+
+class _AnnouncementComposerState extends State<_AnnouncementComposer> {
+  static const double _menuHeight = 280;
+
+  final Set<String> _selected = {};
+  final _sendToLayer = LayerLink();
+  final _sendToPortal = OverlayPortalController();
+  bool _everyone = false;
+
+  @override
+  void didUpdateWidget(covariant _AnnouncementComposer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final ids = widget.people.map((person) => person.id).toSet();
+    if (_everyone) {
+      _selected
+        ..clear()
+        ..addAll(ids);
+    } else {
+      _selected.removeWhere((id) => !ids.contains(id));
+      if (ids.isNotEmpty && _selected.length == ids.length) _everyone = true;
+    }
+    if (widget.posting && _sendToPortal.isShowing) _sendToPortal.hide();
+  }
+
+  void _selectAll() {
+    _everyone = true;
+    _selected
+      ..clear()
+      ..addAll(widget.people.map((person) => person.id));
+  }
+
+  String _nameOf(AdminUserRecord person) {
+    final name = person.displayName.trim();
+    return name.isEmpty || name == '—' ? person.email : name;
+  }
+
+  String _countLabel(int count) => count == 1 ? '1 user selected' : '$count users selected';
+
+  String get _closedLabel {
+    if (_everyone) return 'Everyone';
+    if (_selected.isEmpty) return 'Not selected';
+    return _countLabel(_selected.length);
+  }
+
+  Future<void> _publish() async {
+    if (!_everyone && _selected.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Select at least one person, or send to everyone.')),
+      );
+      return;
+    }
+    final ids = _everyone ? const <String>[] : _selected.toList();
+    final ok = await widget.onPublish(ids);
+    if (!ok || !mounted) return;
+    setState(() {
+      _everyone = false;
+      _selected.clear();
+      if (_sendToPortal.isShowing) _sendToPortal.hide();
+    });
+  }
+
+  void _toggleEveryone(bool selected) {
+    setState(() {
+      if (selected) {
+        _selectAll();
+      } else {
+        _everyone = false;
+        _selected.clear();
+      }
+    });
+  }
+
+  void _toggleUser(String id, bool selected) {
+    if (_everyone) return;
+    setState(() {
+      if (selected) {
+        _selected.add(id);
+      } else {
+        _selected.remove(id);
+      }
+      if (widget.people.isNotEmpty && _selected.length == widget.people.length) {
+        _everyone = true;
+      }
+    });
+  }
+
+  Widget _sendToMenu(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final count = _everyone ? widget.people.length : _selected.length;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        CheckboxListTile(
+          dense: true,
+          value: _everyone,
+          controlAffinity: ListTileControlAffinity.leading,
+          title: const Text('Everyone'),
+          onChanged: widget.posting ? null : (value) => _toggleEveryone(value ?? false),
+        ),
+        Divider(height: 1, color: cs.outline.withValues(alpha: 0.2)),
+        Expanded(
+          child: widget.people.isEmpty
+              ? Center(
+                  child: Text(
+                    'No people available yet.',
+                    style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                  ),
+                )
+              : ListView.builder(
+                  itemCount: widget.people.length,
+                  itemBuilder: (context, index) {
+                    final person = widget.people[index];
+                    final checked = _everyone || _selected.contains(person.id);
+                    return CheckboxListTile(
+                      dense: true,
+                      value: checked,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      title: Text(_nameOf(person), maxLines: 1, overflow: TextOverflow.ellipsis),
+                      subtitle: Text(person.email, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      onChanged: widget.posting || _everyone
+                          ? null
+                          : (value) => _toggleUser(person.id, value ?? false),
+                    );
+                  },
+                ),
+        ),
+        Divider(height: 1, color: cs.outline.withValues(alpha: 0.2)),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Text(
+            _countLabel(count),
+            style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _sendToField(BuildContext context, double width) {
+    final cs = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    return CompositedTransformTarget(
+      link: _sendToLayer,
+      child: OverlayPortal(
+        controller: _sendToPortal,
+        overlayChildBuilder: (overlayContext) {
+          return Stack(
+            children: [
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: _sendToPortal.hide,
+                ),
+              ),
+              CompositedTransformFollower(
+                link: _sendToLayer,
+                targetAnchor: Alignment.bottomLeft,
+                followerAnchor: Alignment.topLeft,
+                offset: const Offset(0, 4),
+                showWhenUnlinked: false,
+                child: Align(
+                  alignment: Alignment.topLeft,
+                  child: SizedBox(
+                    width: width,
+                    height: _menuHeight,
+                    child: Material(
+                      elevation: 6,
+                      color: cs.surface,
+                      surfaceTintColor: cs.surfaceTint,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(AppRadius.md),
+                        side: BorderSide(color: cs.outline.withValues(alpha: 0.4)),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: _sendToMenu(overlayContext),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+        child: InkWell(
+          onTap: widget.posting
+              ? null
+              : () {
+                  if (_sendToPortal.isShowing) {
+                    _sendToPortal.hide();
+                  } else {
+                    _sendToPortal.show();
+                  }
+                },
+          borderRadius: BorderRadius.circular(4),
+          child: InputDecorator(
+            isEmpty: false,
+            decoration: InputDecoration(
+              labelText: 'Send to',
+              border: const OutlineInputBorder(),
+              suffixIcon: Icon(_sendToPortal.isShowing ? Icons.arrow_drop_up : Icons.arrow_drop_down),
+            ),
+            child: Text(
+              _closedLabel,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodyLarge?.copyWith(
+                color: _everyone || _selected.isNotEmpty ? null : cs.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+
     return DecoratedBox(
       decoration: BoxDecoration(
         color: cs.surfaceContainerHighest.withValues(alpha: 0.45),
@@ -1213,24 +1501,28 @@ class _AnnouncementComposer extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('New announcement', style: Theme.of(context).textTheme.titleMedium?.semiBold),
+            Text('New announcement', style: theme.textTheme.titleMedium?.semiBold),
+            const SizedBox(height: 12),
+            LayoutBuilder(
+              builder: (context, constraints) => _sendToField(context, constraints.maxWidth),
+            ),
             const SizedBox(height: 12),
             TextField(
-              controller: titleController,
+              controller: widget.titleController,
               textInputAction: TextInputAction.next,
               decoration: const InputDecoration(labelText: 'Title', border: OutlineInputBorder()),
             ),
             const SizedBox(height: 12),
             TextField(
-              controller: bodyController,
+              controller: widget.bodyController,
               minLines: 5,
               maxLines: 8,
               decoration: const InputDecoration(labelText: 'Message', alignLabelWithHint: true, border: OutlineInputBorder()),
             ),
             const SizedBox(height: 12),
             FilledButton.icon(
-              onPressed: posting ? null : onPublish,
-              icon: posting
+              onPressed: widget.posting ? null : _publish,
+              icon: widget.posting
                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.campaign_outlined),
               label: const Text('Publish'),
@@ -1244,9 +1536,10 @@ class _AnnouncementComposer extends StatelessWidget {
 
 class _AnnouncementCard extends StatelessWidget {
   final AdminAnnouncementRecord item;
+  final String audience;
   final VoidCallback onDelete;
 
-  const _AnnouncementCard({required this.item, required this.onDelete});
+  const _AnnouncementCard({required this.item, required this.audience, required this.onDelete});
 
   @override
   Widget build(BuildContext context) {
@@ -1263,9 +1556,9 @@ class _AnnouncementCard extends StatelessWidget {
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: () => _showAnnouncementDetail(context, item, onDelete),
+        onTap: () => _showAnnouncementDetail(context, item, audience, onDelete),
         child: SizedBox(
-          height: 120,
+          height: 136,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 8, 12),
             child: Column(
@@ -1281,6 +1574,16 @@ class _AnnouncementCard extends StatelessWidget {
                         style: theme.textTheme.titleMedium?.semiBold,
                       ),
                     ),
+                    Flexible(
+                      child: Text(
+                        audience,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.right,
+                        style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
                     Text(_formatDate(item.createdAt), style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
                     IconButton(
                       tooltip: 'Delete',
@@ -1310,7 +1613,12 @@ class _AnnouncementCard extends StatelessWidget {
 }
 
 /// Full announcement in a modal (opened from an [_AnnouncementCard]).
-Future<void> _showAnnouncementDetail(BuildContext context, AdminAnnouncementRecord item, VoidCallback onDelete) {
+Future<void> _showAnnouncementDetail(
+  BuildContext context,
+  AdminAnnouncementRecord item,
+  String audience,
+  VoidCallback onDelete,
+) {
   final theme = Theme.of(context);
   return showDialog<void>(
     context: context,
@@ -1325,6 +1633,11 @@ Future<void> _showAnnouncementDetail(BuildContext context, AdminAnnouncementReco
           children: [
             Text(
               AppTime.formatDateTime(item.createdAt),
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'To: $audience',
               style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
             const SizedBox(height: 12),
