@@ -1545,63 +1545,86 @@ class _AnnouncementCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final radius = BorderRadius.circular(AppRadius.md);
-    // Every card has the same height: 1-line title + 2-line body preview, ellipsized.
+    final radius = BorderRadius.circular(AppRadius.lg);
+    final everyone = item.sendsToEveryone;
+    final title = item.title.trim().isEmpty ? 'Untitled announcement' : item.title.trim();
     // Tap opens the full announcement in a modal.
-    return Material(
-      color: Colors.transparent,
-      shape: RoundedRectangleBorder(
+    return DecoratedBox(
+      decoration: BoxDecoration(
         borderRadius: radius,
-        side: BorderSide(color: cs.outline.withValues(alpha: 0.12)),
+        boxShadow: [
+          BoxShadow(
+            color: cs.shadow.withValues(alpha: 0.06),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
       ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () => _showAnnouncementDetail(context, item, audience, onDelete),
-        child: SizedBox(
-          height: 136,
+      child: Material(
+        color: cs.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: radius,
+          side: BorderSide(color: cs.outline.withValues(alpha: 0.10)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () => _showAnnouncementDetail(context, item, audience, onDelete),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 8, 12),
-            child: Column(
+            padding: const EdgeInsets.fromLTRB(14, 14, 4, 14),
+            child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        item.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.titleMedium?.semiBold,
-                      ),
-                    ),
-                    Flexible(
-                      child: Text(
-                        audience,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.right,
-                        style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(_formatDate(item.createdAt), style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
-                    IconButton(
-                      tooltip: 'Delete',
-                      onPressed: onDelete,
-                      icon: const Icon(Icons.delete_outline),
-                    ),
-                  ],
-                ),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: Text(
-                      item.body,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodyMedium,
-                    ),
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: cs.primary.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(AppRadius.md),
                   ),
+                  child: Icon(Icons.campaign_rounded, size: 22, color: cs.primary),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700, height: 1.2),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            _announcementWhen(item.createdAt),
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: cs.onSurfaceVariant,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        item.body.trim().isEmpty ? 'No message' : item.body.trim(),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant, height: 1.35),
+                      ),
+                      const SizedBox(height: 10),
+                      _AudienceChip(label: audience, everyone: everyone),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Delete',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: onDelete,
+                  icon: Icon(Icons.delete_outline_rounded, size: 20, color: cs.error.withValues(alpha: 0.85)),
                 ),
               ],
             ),
@@ -1610,6 +1633,59 @@ class _AnnouncementCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class _AudienceChip extends StatelessWidget {
+  final String label;
+  final bool everyone;
+
+  const _AudienceChip({required this.label, required this.everyone});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final color = everyone ? cs.primary : cs.onSurfaceVariant;
+    final text = label.trim().isEmpty ? (everyone ? 'Everyone' : 'Selected users') : label.trim();
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 320),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: everyone ? cs.primary.withValues(alpha: 0.08) : cs.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(everyone ? Icons.public_rounded : Icons.group_outlined, size: 14, color: color),
+            const SizedBox(width: 5),
+            Flexible(
+              child: Text(
+                everyone ? 'Everyone' : text,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.labelSmall?.copyWith(color: color, fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// "Just now", "5m ago", "3h ago", "Yesterday", "4d ago", then the local date.
+String _announcementWhen(DateTime? createdAt) {
+  if (createdAt == null) return '';
+  final diff = DateTime.now().toUtc().difference(createdAt.toUtc());
+  if (diff.isNegative || diff.inMinutes < 1) return 'Just now';
+  if (diff.inHours < 1) return '${diff.inMinutes}m ago';
+  if (diff.inDays < 1) return '${diff.inHours}h ago';
+  if (diff.inDays == 1) return 'Yesterday';
+  if (diff.inDays < 7) return '${diff.inDays}d ago';
+  return AppTime.formatDateDmy(createdAt);
 }
 
 /// Full announcement in a modal (opened from an [_AnnouncementCard]).
