@@ -14,6 +14,12 @@ class PendingInvoicePaymentStorage {
   /// Local-only key holding the Xero discount % (removed before the payload is posted to Make).
   static const String discountKey = '_local_discount_percent';
 
+  /// Local-only key holding the amount charged, in dollars. Removed before posting to Make.
+  static const String payAmountKey = '_local_pay_amount';
+
+  /// Set after Make accepts the paid invoice, so a retry only updates credit_used.
+  static const String makeDoneKey = '_local_make_done';
+
   static Future<void> save(Map<String, dynamic> payload) async {
     try {
       final prefs = await SharedPreferences.getInstance();

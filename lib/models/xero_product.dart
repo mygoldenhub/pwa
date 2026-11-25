@@ -9,6 +9,7 @@ class XeroProduct {
   final String? salesAccount;
   final String? taxRate;
   final String? description;
+  final double? quantityOnHand;
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
@@ -20,9 +21,17 @@ class XeroProduct {
     required this.salesAccount,
     required this.taxRate,
     required this.description,
+    this.quantityOnHand,
     required this.createdAt,
     required this.updatedAt,
   });
+
+  /// On-hand stock for display. Missing stock is shown as 0.
+  String get stockLabel {
+    final qty = quantityOnHand ?? 0;
+    if (qty == qty.roundToDouble()) return qty.toInt().toString();
+    return qty.toString();
+  }
 
   XeroProduct copyWith({
     String? xeroItemId,
@@ -32,6 +41,7 @@ class XeroProduct {
     String? salesAccount,
     String? taxRate,
     String? description,
+    double? quantityOnHand,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -43,6 +53,7 @@ class XeroProduct {
       salesAccount: salesAccount ?? this.salesAccount,
       taxRate: taxRate ?? this.taxRate,
       description: description ?? this.description,
+      quantityOnHand: quantityOnHand ?? this.quantityOnHand,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -57,6 +68,7 @@ class XeroProduct {
       'salesAccount': salesAccount,
       'taxRate': taxRate,
       'description': description,
+      'quantityOnHand': quantityOnHand,
       'createdAt': createdAt?.toIso8601String(),
       'updatedAt': updatedAt?.toIso8601String(),
     };
@@ -77,6 +89,7 @@ class XeroProduct {
       salesAccount: json['salesAccount']?.toString(),
       taxRate: json['taxRate']?.toString(),
       description: json['description']?.toString(),
+      quantityOnHand: (json['quantityOnHand'] as num?)?.toDouble(),
       createdAt: createdAtRaw is String ? DateTime.tryParse(createdAtRaw) : null,
       updatedAt: updatedAtRaw is String ? DateTime.tryParse(updatedAtRaw) : null,
     );
@@ -109,6 +122,8 @@ class XeroProduct {
 
     final salesDetails = tryJsonMap(row['sales_details']);
     final unitPrice = salesDetails?['UnitPrice'] ?? salesDetails?['unit_price'] ?? salesDetails?['unitPrice'];
+    final rawQty = row['quantity_on_hand'];
+    final quantityOnHand = rawQty is num ? rawQty.toDouble() : double.tryParse(rawQty?.toString() ?? '');
 
     return XeroProduct(
       xeroItemId: row['item_id']?.toString() ?? row['xero_item_id']?.toString() ?? '',
@@ -118,6 +133,7 @@ class XeroProduct {
       salesAccount: (salesDetails?['AccountCode'] ?? salesDetails?['account_code'] ?? row['sales_account'])?.toString(),
       taxRate: (salesDetails?['TaxType'] ?? salesDetails?['tax_type'] ?? row['tax_rate'])?.toString(),
       description: row['description']?.toString(),
+      quantityOnHand: quantityOnHand,
       createdAt: tryDate(row['created_at']),
       updatedAt: tryDate(row['updated_date_utc'] ?? row['updated_at']),
     );

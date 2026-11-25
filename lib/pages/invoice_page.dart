@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:pwa/app_state.dart';
+import 'package:pwa/components/credit_limit_alert.dart';
 import 'package:pwa/components/invoice_details_sheet.dart';
 import 'package:pwa/components/app_header.dart';
 import 'package:pwa/components/new_invoice_sheet.dart';
 import 'package:pwa/models/xero_invoice.dart';
 import 'package:pwa/nav.dart';
+import 'package:pwa/services/credit_service.dart';
 import 'package:pwa/services/invoice_webhook_service.dart';
 import 'package:pwa/services/pending_invoice_payment_storage.dart';
 import 'package:pwa/services/stripe_checkout_service.dart';
@@ -14,9 +17,10 @@ import 'package:pwa/utils/app_time.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class InvoicePage extends StatefulWidget {
+  final AppState appState;
   final Object? draft;
   final Object? webhook;
-  const InvoicePage({super.key, this.draft, this.webhook});
+  const InvoicePage({super.key, required this.appState, this.draft, this.webhook});
 
   @override
   State<InvoicePage> createState() => _InvoicePageState();
@@ -111,16 +115,29 @@ class _InvoicePageState extends State<InvoicePage> {
     );
 
     try {
+      final lineItems = StripeCheckoutService.buildLineItemsFromInvoice(invoice);
+      final payCents = CreditService.totalCents(lineItems);
+      final credit = await CreditService.loadMine();
+      if (!CreditService.covers(plan: credit.plan, used: credit.used, payCents: payCents)) {
+        if (!mounted) return;
+        context.pop();
+        await showCreditLimitAlert(context);
+        return;
+      }
+
       // Requirement: when paying an existing invoice, save the invoice payload
       // locally before leaving the app for Stripe Checkout.
-      await PendingInvoicePaymentStorage.save(_buildInvoicePaymentPayload(invoice));
+      await PendingInvoicePaymentStorage.save({
+        ..._buildInvoicePaymentPayload(invoice),
+        PendingInvoicePaymentStorage.payAmountKey: payCents / 100.0,
+      });
 
       final currency = (invoice.currencyCode ?? '').trim().isEmpty ? 'aud' : invoice.currencyCode!.trim();
       final checkoutUrl = await StripeCheckoutService.createHostedCheckoutUrl(
         currency: currency,
         reference: (invoice.reference ?? invoice.invoiceNum ?? '').trim(),
         invoiceId: invoice.invoiceId,
-        lineItems: StripeCheckoutService.buildLineItemsFromInvoice(invoice),
+        lineItems: lineItems,
         customerEmail: null,
       );
 
@@ -600,7 +617,16 @@ class _InvoicePageState extends State<InvoicePage> {
     final cs = Theme.of(context).colorScheme;
     final typedDraft = (widget.draft is InvoiceDraft) ? (widget.draft as InvoiceDraft) : null;
     return Scaffold(
-      appBar: const AppImpactHeader(title: 'Invoice'),
+      appBar: AppImpactHeader(
+        title: 'Invoice',
+        actions: [
+          AppHeaderActions(
+            auth: widget.appState.auth,
+            isAdmin: () => widget.appState.auth.isAdmin,
+            onAdmin: () => context.go(AppRoutes.admin),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: Stack(
           children: [

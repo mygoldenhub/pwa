@@ -2,7 +2,9 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:pwa/components/credit_limit_alert.dart';
 import 'package:pwa/models/xero_invoice.dart';
+import 'package:pwa/services/credit_service.dart';
 import 'package:pwa/services/invoice_webhook_service.dart';
 import 'package:pwa/services/pending_invoice_payment_storage.dart';
 import 'package:pwa/services/stripe_checkout_service.dart';
@@ -161,15 +163,28 @@ class _InvoiceDetailsDialogState extends State<InvoiceDetailsDialog> {
     );
 
     try {
+      final lineItems = StripeCheckoutService.buildLineItemsFromInvoice(invoice);
+      final payCents = CreditService.totalCents(lineItems);
+      final credit = await CreditService.loadMine();
+      if (!CreditService.covers(plan: credit.plan, used: credit.used, payCents: payCents)) {
+        if (!mounted) return;
+        context.pop();
+        await showCreditLimitAlert(context);
+        return;
+      }
+
       // Requirement: persist invoice details before leaving to Stripe Checkout.
-      await PendingInvoicePaymentStorage.save(_buildInvoicePaymentPayload(invoice));
+      await PendingInvoicePaymentStorage.save({
+        ..._buildInvoicePaymentPayload(invoice),
+        PendingInvoicePaymentStorage.payAmountKey: payCents / 100.0,
+      });
 
       final currency = (invoice.currencyCode ?? '').trim().isEmpty ? 'aud' : invoice.currencyCode!.trim();
       final checkoutUrl = await StripeCheckoutService.createHostedCheckoutUrl(
         currency: currency,
         reference: (invoice.reference ?? invoice.invoiceNum ?? '').trim(),
         invoiceId: invoice.invoiceId,
-        lineItems: StripeCheckoutService.buildLineItemsFromInvoice(invoice),
+        lineItems: lineItems,
         customerEmail: null,
       );
 

@@ -42,6 +42,7 @@ class _XeroProductNamePickerSheetState extends State<XeroProductNamePickerSheet>
   bool _hasMore = false;
   int _offset = 0;
   static const int _pageSize = 20;
+  bool _inStockOnly = false;
   List<XeroProduct> _results = const [];
   Timer? _debounce;
 
@@ -100,7 +101,12 @@ class _XeroProductNamePickerSheetState extends State<XeroProductNamePickerSheet>
       _hasMore = false;
     });
 
-    final rows = await XeroProductService.searchByNamePrefixPaged(q, limit: _pageSize, offset: 0);
+    final rows = await XeroProductService.searchByNamePrefixPaged(
+      q,
+      limit: _pageSize,
+      offset: 0,
+      inStockOnly: _inStockOnly,
+    );
     if (!mounted) return;
     setState(() {
       _results = rows;
@@ -115,7 +121,12 @@ class _XeroProductNamePickerSheetState extends State<XeroProductNamePickerSheet>
     if (q.isEmpty || _isLoading || _isLoadingMore || !_hasMore) return;
     setState(() => _isLoadingMore = true);
     try {
-      final rows = await XeroProductService.searchByNamePrefixPaged(q, limit: _pageSize, offset: _offset);
+      final rows = await XeroProductService.searchByNamePrefixPaged(
+        q,
+        limit: _pageSize,
+        offset: _offset,
+        inStockOnly: _inStockOnly,
+      );
       if (!mounted) return;
       setState(() {
         final seen = _results.map((e) => e.xeroItemId).toSet();
@@ -172,9 +183,35 @@ class _XeroProductNamePickerSheetState extends State<XeroProductNamePickerSheet>
                 ),
               ],
             ),
-            Text(
-              'Start typing to search products in store.',
-              style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: Text(
+                    'Start typing to search products in store.',
+                    style: Theme.of(context).textTheme.bodyMedium?.withColor(cs.onSurfaceVariant),
+                  ),
+                ),
+                Tooltip(
+                  message: 'Only show products in stock',
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('In stock', style: Theme.of(context).textTheme.bodySmall?.withColor(cs.onSurfaceVariant)),
+                      Checkbox(
+                        value: _inStockOnly,
+                        visualDensity: VisualDensity.compact,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        onChanged: (value) {
+                          setState(() => _inStockOnly = value ?? false);
+                          _debounce?.cancel();
+                          _loadFirstPage();
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: AppSpacing.lg),
             TextField(
@@ -227,10 +264,12 @@ class _XeroProductNamePickerSheetState extends State<XeroProductNamePickerSheet>
                         text: 'Try searching by product name, like “Ardex FG 8 misty grey”.',
                       )
                     : (!_isLoading && _results.isEmpty)
-                        ? const _HintPanel(
-                            key: ValueKey('empty'),
+                        ? _HintPanel(
+                            key: const ValueKey('empty'),
                             icon: Icons.search_off,
-                            text: 'No matches. If you expect products, confirm Xero sync is running and that you have read access to xero_products.',
+                            text: _inStockOnly
+                                ? 'No in-stock matches. Untick In stock to see every product.'
+                                : 'No matches. If you expect products, confirm Xero sync is running and that you have read access to xero_products.',
                           )
                         : ListView.separated(
                             key: const ValueKey('results'),
@@ -327,6 +366,7 @@ class _XeroProductSuggestionTileState extends State<_XeroProductSuggestionTile> 
     final subtitle = <String>[
       if ((p.code ?? '').trim().isNotEmpty) 'Code: ${p.code}',
       if (p.salePriceCents != null) '\$${(p.salePriceCents! / 100).toStringAsFixed(2)}',
+      'Stock: ${p.stockLabel}',
     ].join(' · ');
 
     return MouseRegion(

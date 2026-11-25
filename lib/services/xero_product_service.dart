@@ -27,17 +27,18 @@ class XeroProductService {
     String like, {
     required int limit,
     int offset = 0,
+    bool inStockOnly = false,
   }) async {
     Future<List<Map<String, dynamic>>> run(String select) async {
       final from = offset.clamp(0, 1 << 31);
       final to = (from + limit - 1).clamp(from, 1 << 31);
       // Hide archived items from product-name typeahead (Cart add flow).
-      final res = await SupabaseService.from(_table)
+      var query = SupabaseService.from(_table)
           .select(select)
           .ilike('name', like)
-          .not('name', 'ilike', '%[Archived]%')
-          .order('name', ascending: true)
-          .range(from, to);
+          .not('name', 'ilike', '%[Archived]%');
+      if (inStockOnly) query = query.gt('quantity_on_hand', 0);
+      final res = await query.order('name', ascending: true).range(from, to);
       return (res as List).cast<Map<String, dynamic>>();
     }
 
@@ -69,6 +70,7 @@ class XeroProductService {
     List<String> tokens, {
     required int limit,
     int offset = 0,
+    bool inStockOnly = false,
   }) async {
     if (tokens.isEmpty) return [];
 
@@ -80,6 +82,7 @@ class XeroProductService {
       }
       // Hide archived items from product-name typeahead (Cart add flow).
       q = q.not('name', 'ilike', '%[Archived]%');
+      if (inStockOnly) q = q.gt('quantity_on_hand', 0);
       final from = offset.clamp(0, 1 << 31);
       final to = (from + limit - 1).clamp(from, 1 << 31);
       final res = await q.order('name', ascending: true).range(from, to);
@@ -191,6 +194,7 @@ class XeroProductService {
     String query, {
     int limit = 20,
     int offset = 0,
+    bool inStockOnly = false,
   }) async {
     final q = _normalizePhraseQuery(query);
     if (q.isEmpty) return [];
@@ -200,7 +204,13 @@ class XeroProductService {
     // tokens, regardless of order.
     final tokens = _tokenizeQuery(q);
     if (tokens.length >= 2) {
-      return _searchByAllTokens(tokens, limit: limit, offset: offset, rawQueryForDiagnostics: q);
+      return _searchByAllTokens(
+        tokens,
+        limit: limit,
+        offset: offset,
+        rawQueryForDiagnostics: q,
+        inStockOnly: inStockOnly,
+      );
     }
 
     try {
@@ -208,7 +218,7 @@ class XeroProductService {
       // Prefix-priority merging is intentionally skipped here because it makes
       // offset-based pagination ambiguous (two differently offset lists).
       final containsLike = '%${q}%';
-      final rows = await _safeSearch(containsLike, limit: limit, offset: offset);
+      final rows = await _safeSearch(containsLike, limit: limit, offset: offset, inStockOnly: inStockOnly);
       final merged = rows
           .map(XeroProduct.fromRow)
           .where((p) => p.xeroItemId.isNotEmpty && p.name.trim().isNotEmpty && !_isArchivedName(p.name))
@@ -233,9 +243,10 @@ class XeroProductService {
     required int limit,
     int offset = 0,
     required String rawQueryForDiagnostics,
+    bool inStockOnly = false,
   }) async {
     try {
-      final rows = await _safeSearchAllTokens(tokens, limit: limit, offset: offset);
+      final rows = await _safeSearchAllTokens(tokens, limit: limit, offset: offset, inStockOnly: inStockOnly);
       final parsed = rows
           .map(XeroProduct.fromRow)
           .where((p) => p.xeroItemId.isNotEmpty && p.name.trim().isNotEmpty && !_isArchivedName(p.name))
@@ -317,6 +328,12 @@ class XeroProductService {
       debugPrint('XeroProductService.getByXeroItemId failed: $e');
       return null;
     }
+  }
+
+  /// Subtracts created-invoice quantities from `xero_products.quantity_on_hand`, never below 0.
+  static Future<void> applyPaidStock(List<Map<String, dynamic>> lines) async {
+    if (lines.isEmpty) return;
+    await SupabaseConfig.client.rpc('apply_paid_invoice_stock', params: {'lines': lines});
   }
 
   static Future<XeroProduct?> getByCode(String code) async {

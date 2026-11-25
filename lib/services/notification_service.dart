@@ -43,6 +43,7 @@ class AppNotification {
 class NotificationService {
   static const String _announcements = 'announcements';
   static const String _reads = 'announcement_reads';
+  static const String _dismissals = 'announcement_dismissals';
 
   static String? get _userId {
     final id = SupabaseConfig.auth.currentUser?.id;
@@ -57,13 +58,22 @@ class NotificationService {
     final controller = StreamController<List<AppNotification>>();
     List<Map<String, dynamic>>? announcements;
     Set<String> readIds = <String>{};
+    Set<String> dismissedIds = <String>{};
+    var readsReady = false;
+    var dismissalsReady = false;
     StreamSubscription? annSub;
     StreamSubscription? readSub;
+    StreamSubscription? dismissSub;
 
     void emit() {
       final rows = announcements;
-      if (rows == null || controller.isClosed) return;
-      final list = rows.where((row) => _visibleTo(row, userId)).map((row) {
+      // Wait for read and dismissal snapshots. Until then every row looks unread,
+      // and the bell would flash the full broadcast count.
+      if (rows == null || !readsReady || !dismissalsReady || controller.isClosed) return;
+      final list = rows.where((row) {
+        final id = (row['id'] ?? '').toString();
+        return _visibleTo(row, userId) && !dismissedIds.contains(id);
+      }).map((row) {
         final id = (row['id'] ?? '').toString();
         return AppNotification(
           id: id,
@@ -102,16 +112,35 @@ class NotificationService {
           .eq('user_id', userId)
           .listen((rows) {
         readIds = {for (final r in rows) (r['announcement_id'] ?? '').toString()};
+        readsReady = true;
         emit();
       }, onError: (Object e) {
         // Read state is non-critical: keep showing announcements (all unread).
         debugPrint('NotificationService reads stream error: $e');
+        readsReady = true;
+        emit();
+      });
+
+      dismissSub = SupabaseConfig.client
+          .from(_dismissals)
+          .stream(primaryKey: const ['user_id', 'announcement_id'])
+          .eq('user_id', userId)
+          .listen((rows) {
+        dismissedIds = {for (final r in rows) (r['announcement_id'] ?? '').toString()};
+        dismissalsReady = true;
+        emit();
+      }, onError: (Object e) {
+        // Dismissals are non-critical: keep showing announcements until the table exists.
+        debugPrint('NotificationService dismissals stream error: $e');
+        dismissalsReady = true;
+        emit();
       });
     };
 
     controller.onCancel = () async {
       await annSub?.cancel();
       await readSub?.cancel();
+      await dismissSub?.cancel();
       await controller.close();
     };
 
@@ -156,6 +185,17 @@ class NotificationService {
       ];
     }
     return const [];
+  }
+
+  /// Removes one broadcast from this user's notification list. Other users still see it.
+  static Future<void> dismiss(String announcementId) async {
+    final userId = _userId;
+    if (userId == null || announcementId.isEmpty) return;
+    await SupabaseConfig.client.from(_dismissals).upsert(
+      {'user_id': userId, 'announcement_id': announcementId},
+      onConflict: 'user_id,announcement_id',
+      ignoreDuplicates: true,
+    );
   }
 
   static Future<void> markRead(String announcementId) => markAllRead([announcementId]);

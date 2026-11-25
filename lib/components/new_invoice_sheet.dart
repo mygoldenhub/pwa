@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:pwa/supabase/supabase_config.dart';
 import 'package:pwa/theme.dart';
 
 enum LineAmountType { exclusive, inclusive, noTax }
@@ -38,7 +39,30 @@ class InvoiceDraft {
 class NewInvoiceSheet extends StatefulWidget {
   final int totalBudgetCents;
 
-  const NewInvoiceSheet({super.key, required this.totalBudgetCents});
+  /// Days from `users.invoice_terms` (7, 14, or 30). The due date is the invoice date plus this.
+  final int termDays;
+
+  const NewInvoiceSheet({super.key, required this.totalBudgetCents, this.termDays = 7});
+
+  /// Signed-in user's invoice term, in days. Unknown or missing values fall back to 7.
+  static Future<int> loadTermDays() async {
+    try {
+      final id = SupabaseConfig.auth.currentUser?.id;
+      if (id == null || id.isEmpty) return 7;
+      final row = await SupabaseConfig.client.from('users').select('invoice_terms').eq('id', id).maybeSingle();
+      return termDaysFrom(row?['invoice_terms']?.toString());
+    } catch (e) {
+      debugPrint('Invoice terms lookup failed: $e');
+      return 7;
+    }
+  }
+
+  static int termDaysFrom(String? raw) {
+    final match = RegExp(r'^(\d+)').firstMatch(raw?.trim() ?? '');
+    final days = int.tryParse(match?.group(1) ?? '');
+    if (days == 7 || days == 14 || days == 30) return days!;
+    return 7;
+  }
 
   @override
   State<NewInvoiceSheet> createState() => _NewInvoiceSheetState();
@@ -56,7 +80,7 @@ class _NewInvoiceSheetState extends State<NewInvoiceSheet> {
   static const LineAmountType _fixedLineAmountType = LineAmountType.exclusive;
   late final DateTime _date;
 
-  DateTime get _dueDate => _date.add(const Duration(days: 7));
+  DateTime get _dueDate => _date.add(Duration(days: widget.termDays));
 
   @override
   void initState() {

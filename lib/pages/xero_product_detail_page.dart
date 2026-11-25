@@ -188,7 +188,16 @@ class _XeroProductDetailPageState extends State<XeroProductDetailPage> {
                                 ),
                               ],
                               const SizedBox(height: AppSpacing.xl),
-                              Text('Price: $priceText', style: Theme.of(context).textTheme.titleLarge?.semiBold),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text('Price: $priceText', style: Theme.of(context).textTheme.titleLarge?.semiBold),
+                                  ),
+                                  Expanded(
+                                    child: Text('Stock: ${p.stockLabel}', style: Theme.of(context).textTheme.titleLarge?.semiBold),
+                                  ),
+                                ],
+                              ),
                               const SizedBox(height: AppSpacing.xl),
                               LayoutBuilder(
                                 builder: (context, constraints) {

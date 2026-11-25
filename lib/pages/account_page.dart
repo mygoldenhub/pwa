@@ -4,6 +4,7 @@ import 'package:pwa/app_state.dart';
 import 'package:pwa/components/app_header.dart';
 import 'package:pwa/nav.dart';
 import 'package:pwa/services/auth_service.dart';
+import 'package:pwa/services/credit_service.dart';
 import 'package:pwa/theme.dart';
 
 class AccountPage extends StatefulWidget {
@@ -16,6 +17,23 @@ class AccountPage extends StatefulWidget {
 
 class _AccountPageState extends State<AccountPage> {
   bool _busy = false;
+  _CreditTier? _creditTier;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCreditPlan();
+  }
+
+  Future<void> _loadCreditPlan() async {
+    try {
+      final credit = await CreditService.loadMine();
+      if (!mounted) return;
+      setState(() => _creditTier = _CreditTier.fromPlan(credit.plan));
+    } catch (e) {
+      debugPrint('Account credit plan failed: $e');
+    }
+  }
 
   Future<T?> _showCenteredModal<T>({required Widget child}) {
     final cs = Theme.of(context).colorScheme;
@@ -128,12 +146,24 @@ class _AccountPageState extends State<AccountPage> {
     final user = widget.appState.auth.currentUser;
 
     return Scaffold(
-      appBar: const AppImpactHeader(title: 'Account'),
+      appBar: AppImpactHeader(
+        title: 'Account',
+        actions: [
+          AppHeaderActions(
+            auth: widget.appState.auth,
+            isAdmin: () => widget.appState.auth.isAdmin,
+            onAdmin: () => context.go(AppRoutes.admin),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: Stack(
           children: [
             RefreshIndicator.adaptive(
-              onRefresh: () async => widget.appState.auth.refreshProfile(),
+              onRefresh: () async {
+                await widget.appState.auth.refreshProfile();
+                await _loadCreditPlan();
+              },
               child: ListView(
                 padding: AppSpacing.paddingLg,
                 children: [
@@ -142,6 +172,7 @@ class _AccountPageState extends State<AccountPage> {
                     email: user?.email ?? '—',
                     companyName: (user?.companyName?.trim().isNotEmpty ?? false) ? user!.companyName!.trim() : '—',
                     phoneNumber: (user?.phoneNumber?.trim().isNotEmpty ?? false) ? user!.phoneNumber!.trim() : '—',
+                    creditTier: _creditTier,
                   ),
                   if (user?.isAdmin ?? false) ...[
                     const SizedBox(height: AppSpacing.lg),
@@ -222,17 +253,95 @@ class _SectionTitle extends StatelessWidget {
   }
 }
 
+enum _CreditTier {
+  gold,
+  silver,
+  bronze;
+
+  static _CreditTier fromPlan(double plan) {
+    return switch (plan.round()) {
+      5000 => _CreditTier.gold,
+      3000 => _CreditTier.silver,
+      _ => _CreditTier.bronze,
+    };
+  }
+
+  String get label => switch (this) {
+        _CreditTier.gold => 'Gold',
+        _CreditTier.silver => 'Silver',
+        _CreditTier.bronze => 'Bronze',
+      };
+
+  List<Color> get metal => switch (this) {
+        _CreditTier.gold => const [Color(0xFFFFF6D6), Color(0xFFE6C15A), Color(0xFFB8860B)],
+        _CreditTier.silver => const [Color(0xFFF8F9FB), Color(0xFFD5DBE2), Color(0xFF8E98A3)],
+        _CreditTier.bronze => const [Color(0xFFF6D7BE), Color(0xFFC98455), Color(0xFF8C4E2A)],
+      };
+
+  Color get ink => switch (this) {
+        _CreditTier.gold => const Color(0xFF4A3208),
+        _CreditTier.silver => const Color(0xFF2C333A),
+        _CreditTier.bronze => const Color(0xFF3B1E0A),
+      };
+}
+
+class _CreditPlanChip extends StatelessWidget {
+  final _CreditTier tier;
+  const _CreditPlanChip({required this.tier});
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(999),
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: tier.metal,
+          ),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.65)),
+          boxShadow: [
+            BoxShadow(color: tier.metal.last.withValues(alpha: 0.35), blurRadius: 8, offset: const Offset(0, 2)),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.workspace_premium_rounded, size: 16, color: tier.ink),
+              const SizedBox(width: 6),
+              Text(
+                tier.label,
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: tier.ink,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.2,
+                    ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ProfileCard extends StatelessWidget {
   final String displayName;
   final String email;
   final String companyName;
   final String phoneNumber;
+  final _CreditTier? creditTier;
 
   const _ProfileCard({
     required this.displayName,
     required this.email,
     required this.companyName,
     required this.phoneNumber,
+    required this.creditTier,
   });
 
   @override
@@ -269,6 +378,10 @@ class _ProfileCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(displayName, style: Theme.of(context).textTheme.titleLarge?.semiBold),
+                    if (creditTier != null) ...[
+                      const SizedBox(height: AppSpacing.sm),
+                      _CreditPlanChip(tier: creditTier!),
+                    ],
                     const SizedBox(height: AppSpacing.xs),
                     Text(
                       email,

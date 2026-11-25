@@ -4,15 +4,16 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/app_state.dart';
 import 'package:pwa/components/app_header.dart';
+import 'package:pwa/components/credit_limit_alert.dart';
 import 'package:pwa/components/app_modal.dart';
 import 'package:pwa/components/new_invoice_sheet.dart';
-import 'package:pwa/components/notification_bell.dart';
 import 'package:pwa/components/xero_product_name_picker.dart';
 import 'package:pwa/components/quantity_input.dart';
 import 'package:pwa/models/cart_item.dart';
 import 'package:pwa/models/xero_product.dart';
 import 'package:pwa/nav.dart';
 import 'package:pwa/services/cart_service.dart';
+import 'package:pwa/services/credit_service.dart';
 import 'package:pwa/services/invoice_webhook_service.dart';
 import 'package:pwa/services/pending_invoice_payment_storage.dart';
 import 'package:pwa/services/pending_invoice_storage.dart';
@@ -238,6 +239,8 @@ class _ProductsPageState extends State<ProductsPage> {
   }
 
   Future<void> _openNewInvoiceSheet({required int totalBudgetCents, required List<CartItem> cartItems}) async {
+    final termDays = await NewInvoiceSheet.loadTermDays();
+    if (!mounted) return;
     final cs = Theme.of(context).colorScheme;
     final draft = await showDialog<InvoiceDraft>(
       context: context,
@@ -246,7 +249,7 @@ class _ProductsPageState extends State<ProductsPage> {
       builder: (context) => AppCenteredModalDialog(
         child: AppModalSurface(
           padding: const EdgeInsets.all(AppSpacing.lg),
-          child: NewInvoiceSheet(totalBudgetCents: totalBudgetCents),
+          child: NewInvoiceSheet(totalBudgetCents: totalBudgetCents, termDays: termDays),
         ),
       ),
     );
@@ -369,10 +372,11 @@ class _ProductsPageState extends State<ProductsPage> {
   }
 
   /// Pay now:
-  /// 1) Make creates the Xero invoice first — its response carries the invoice id and the
+  /// 1) If credit_plan is below credit_used plus this charge, stop. No invoice is created.
+  /// 2) Make creates the Xero invoice — its response carries the invoice id and the
   ///    customer's Xero discount %.
-  /// 2) Stripe charges the discounted total + GST (exactly what Xero's invoice shows).
-  /// 3) After payment, the success page posts the saved payload (with `invoice_id`) to Make to
+  /// 3) Stripe charges the discounted total + GST (exactly what Xero's invoice shows).
+  /// 4) After payment, the success page posts the saved payload (with `invoice_id`) to Make to
   ///    mark that invoice paid — the same flow as paying an existing invoice.
   /// If the customer cancels Stripe, the invoice stays unpaid on their Invoice page.
   Future<void> _startStripeCheckout({required InvoiceDraft draft, required List<CartItem> cartItems}) async {
@@ -387,6 +391,34 @@ class _ProductsPageState extends State<ProductsPage> {
       return;
     }
 
+    // Decide before Make. Creating the invoice first would leave it behind when the limit is full.
+    try {
+      final credit = await CreditService.loadMine();
+      final estimated = StripeCheckoutService.buildDiscountedCartLineItems(
+        cartItems: cartItems,
+      );
+      if (!CreditService.covers(plan: credit.plan, used: credit.used, payCents: CreditService.totalCents(estimated))) {
+        if (!mounted) return;
+        await showCreditLimitAlert(context);
+        return;
+      }
+    } catch (e) {
+      debugPrint('Pay now: credit check failed: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            showCloseIcon: true,
+            margin: const EdgeInsets.all(AppSpacing.lg),
+            content: Text('Could not check your credit plan: $e'),
+          ),
+        );
+      return;
+    }
+
+    if (!mounted) return;
     // Small blocking progress dialog.
     showDialog<void>(
       context: context,
@@ -425,15 +457,23 @@ class _ProductsPageState extends State<ProductsPage> {
       }
       final discount = created.discountPercent;
       debugPrint('Pay now: created invoice=$invoiceId discount=$discount');
+      await _reduceStockForCreatedInvoice(cartItems);
 
-      // 2) Save the "mark paid" payload for after Stripe; drop any old cart-flow payload so the
-      //    success page can't create a second invoice.
+      final lineItems = StripeCheckoutService.buildDiscountedCartLineItems(
+        cartItems: cartItems,
+        discountPercent: discount,
+      );
+      final payCents = CreditService.totalCents(lineItems);
+
+      // Save the "mark paid" payload for after Stripe; drop any old cart-flow payload so the
+      // success page can't create a second invoice.
       await PendingInvoiceStorage.clear();
       await PendingInvoicePaymentStorage.save({
         ...createPayload,
         'invoice_id': invoiceId,
-        // Local only — the success page removes it before posting to Make.
+        // Local only — the success page removes these before posting to Make.
         if (discount != null) PendingInvoicePaymentStorage.discountKey: discount,
+        PendingInvoicePaymentStorage.payAmountKey: payCents / 100.0,
       });
 
       // The invoice now holds the cart's items.
@@ -461,15 +501,12 @@ class _ProductsPageState extends State<ProductsPage> {
           );
       }
 
-      // 3) Stripe: discounted lines + GST, matching the Xero invoice total.
+      // Stripe: discounted lines + GST, matching the Xero invoice total.
       final checkoutUrl = await StripeCheckoutService.createHostedCheckoutUrl(
         currency: draft.currencyCode,
         reference: draft.reference,
         invoiceId: invoiceId,
-        lineItems: StripeCheckoutService.buildDiscountedCartLineItems(
-          cartItems: cartItems,
-          discountPercent: discount,
-        ),
+        lineItems: lineItems,
         customerEmail: widget.appState.auth.currentUser?.email,
       );
 
@@ -491,6 +528,19 @@ class _ProductsPageState extends State<ProductsPage> {
             ),
           );
       }
+    }
+  }
+
+  Future<void> _reduceStockForCreatedInvoice(List<CartItem> cartItems) async {
+    final lines = [
+      for (final item in cartItems)
+        if (item.xeroItemId.trim().isNotEmpty && item.quantity > 0)
+          {'item_id': item.xeroItemId.trim(), 'quantity': item.quantity},
+    ];
+    try {
+      await XeroProductService.applyPaidStock(lines);
+    } catch (e) {
+      debugPrint('Invoice created, but stock update failed: $e');
     }
   }
 
@@ -539,6 +589,10 @@ class _ProductsPageState extends State<ProductsPage> {
         productsByItemId: map,
         contactId: contactId,
       );
+      final createdInvoiceId = result.invoiceId?.trim() ?? '';
+      if (createdInvoiceId.isNotEmpty) {
+        await _reduceStockForCreatedInvoice(cartItems);
+      }
 
       if (!mounted) return;
       context.pop(); // close loading
@@ -563,7 +617,6 @@ class _ProductsPageState extends State<ProductsPage> {
       }
 
       // Navigate to a success page (after webhook success + cart clear).
-      final createdInvoiceId = result.invoiceId?.trim() ?? '';
       debugPrint('--------createdInvoiceId--------');
       debugPrint('id=$createdInvoiceId discount=${result.discountPercent} body=${result.body}');
       debugPrint('--------createdInvoiceId--------');
@@ -593,31 +646,11 @@ class _ProductsPageState extends State<ProductsPage> {
       appBar: AppImpactHeader(
         title: 'Cart',
         actions: [
-          ListenableBuilder(
-            listenable: widget.appState.auth,
-            builder: (context, _) {
-              final isAdmin = widget.appState.auth.isAdmin;
-              return Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const NotificationBellButton(),
-                  const SizedBox(width: 8),
-                  if (isAdmin) ...[
-                    _HeaderActionButton(
-                      label: 'Admin dashboard',
-                      icon: Icons.admin_panel_settings_outlined,
-                      onTap: () => context.go(AppRoutes.admin),
-                    ),
-                    const SizedBox(width: 8),
-                  ],
-                  _HeaderActionButton(
-                    label: 'Add product',
-                    icon: Icons.add,
-                    onTap: _openScanChooser,
-                  ),
-                ],
-              );
-            },
+          AppHeaderActions(
+            auth: widget.appState.auth,
+            isAdmin: () => widget.appState.auth.isAdmin,
+            onAdmin: () => context.go(AppRoutes.admin),
+            onAdd: _openScanChooser,
           ),
         ],
       ),
@@ -1024,40 +1057,6 @@ class _QtyStepper extends StatelessWidget {
         compact: true,
         commitWhileTyping: false,
         onCommitted: onCommitted,
-      ),
-    );
-  }
-}
-
-class _HeaderActionButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final VoidCallback onTap;
-
-  const _HeaderActionButton({required this.label, required this.icon, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    // Icon-only round button (same size as the notification bell); the label is the tooltip.
-    return Tooltip(
-      message: label,
-      child: Semantics(
-        button: true,
-        label: label,
-        child: GestureDetector(
-          onTap: onTap,
-          child: Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: cs.primary,
-              shape: BoxShape.circle,
-              border: Border.all(color: cs.primary.withValues(alpha: 0.22)),
-            ),
-            child: Icon(icon, size: 20, color: cs.onPrimary),
-          ),
-        ),
       ),
     );
   }

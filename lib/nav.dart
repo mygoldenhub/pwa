@@ -198,7 +198,13 @@ class AppRouter {
                   path: AppRoutes.invoice,
                   pageBuilder: (context, state) {
                     final extra = (state.extra is Map) ? (state.extra as Map) : const <String, dynamic>{};
-                    return NoTransitionPage(child: InvoicePage(draft: extra['draft'], webhook: extra['webhook']));
+                    return NoTransitionPage(
+                      child: InvoicePage(
+                        appState: appState,
+                        draft: extra['draft'],
+                        webhook: extra['webhook'],
+                      ),
+                    );
                   },
                   routes: [
                     GoRoute(

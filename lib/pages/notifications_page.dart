@@ -23,6 +23,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
   late final Stream<List<AppNotification>> _stream = NotificationService.streamMyNotifications();
   int _page = 0;
   _Filter _filter = _Filter.all;
+  final Set<String> _dismissed = {};
 
   void _back() {
     if (context.canPop()) {
@@ -59,7 +60,10 @@ class _NotificationsPageState extends State<NotificationsPage> {
                 subtitle: 'Please check your connection and try again.',
               );
             }
-            final all = snap.data ?? const <AppNotification>[];
+            final all = [
+              for (final n in snap.data ?? const <AppNotification>[])
+                if (!_dismissed.contains(n.id)) n,
+            ];
             return Align(
               alignment: Alignment.topCenter,
               child: ConstrainedBox(
@@ -71,6 +75,43 @@ class _NotificationsPageState extends State<NotificationsPage> {
         ),
       ),
     );
+  }
+
+  Future<void> _deleteNotification(AppNotification n) async {
+    final title = n.title.trim().isEmpty ? 'this notification' : '"${n.title.trim()}"';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete notification?'),
+        content: Text('$title will be removed from your notifications.'),
+        actions: [
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.error),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _dismissed.add(n.id));
+    try {
+      await NotificationService.dismiss(n.id);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _dismissed.remove(n.id));
+      final missing = e.toString().toLowerCase().contains('announcement_dismissals');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            missing
+                ? 'Couldn\'t delete this notification. Run supabase/migrations/0016_announcement_dismissals.sql in the Supabase SQL editor.'
+                : 'Couldn\'t delete this notification.',
+          ),
+        ),
+      );
+    }
   }
 
   Widget _content(BuildContext context, List<AppNotification> all) {
@@ -118,6 +159,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
                     return _NotificationCard(
                       notification: n,
                       onTap: () => showNotificationDetail(context, n),
+                      onDelete: () => _deleteNotification(n),
                     );
                   },
                 ),
@@ -190,8 +232,9 @@ class _Toolbar extends StatelessWidget {
 class _NotificationCard extends StatelessWidget {
   final AppNotification notification;
   final VoidCallback onTap;
+  final VoidCallback onDelete;
 
-  const _NotificationCard({required this.notification, required this.onTap});
+  const _NotificationCard({required this.notification, required this.onTap, required this.onDelete});
 
   static const double height = 104;
 
@@ -210,32 +253,33 @@ class _NotificationCard extends StatelessWidget {
         side: BorderSide(color: unread ? cs.primary.withValues(alpha: 0.28) : cs.outline.withValues(alpha: 0.12)),
       ),
       clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: SizedBox(
-          height: height,
-          child: Row(
-            children: [
-              // Accent bar for unread items.
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                width: 4,
-                color: unread ? cs.primary : Colors.transparent,
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: _Avatar(unread: unread),
-              ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
+      child: SizedBox(
+        height: height,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: InkWell(
+                onTap: onTap,
+                child: Row(
+                  children: [
+                    // Accent bar for unread items.
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      width: 4,
+                      color: unread ? cs.primary : Colors.transparent,
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: _Avatar(unread: unread),
+                    ),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
                               n.title.isEmpty ? 'Announcement' : n.title,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -243,36 +287,51 @@ class _NotificationCard extends StatelessWidget {
                                 fontWeight: unread ? FontWeight.w800 : FontWeight.w600,
                               ),
                             ),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            _relativeTime(n.createdAt),
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: unread ? cs.primary : cs.onSurfaceVariant,
-                              fontWeight: unread ? FontWeight.w700 : FontWeight.w500,
+                            const SizedBox(height: 6),
+                            Expanded(
+                              child: Text(
+                                n.body,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant, height: 1.35),
+                              ),
                             ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Expanded(
-                        child: Text(
-                          n.body,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant, height: 1.35),
+                          ],
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
-              Padding(
-                padding: const EdgeInsets.only(left: 4, right: 10),
-                child: Icon(Icons.chevron_right_rounded, color: cs.onSurfaceVariant.withValues(alpha: 0.6)),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 10, 2, 2),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Text(
+                      _relativeTime(n.createdAt),
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: unread ? cs.primary : cs.onSurfaceVariant,
+                        fontWeight: unread ? FontWeight.w700 : FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    tooltip: 'Delete',
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                    onPressed: onDelete,
+                    icon: Icon(Icons.delete_outline, size: 20, color: cs.error),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -297,7 +356,7 @@ class _Avatar extends StatelessWidget {
             borderRadius: BorderRadius.circular(AppRadius.md),
           ),
           child: Icon(
-            Icons.campaign_rounded,
+            unread ? Icons.notifications_rounded : Icons.notifications_none_rounded,
             size: 22,
             color: unread ? cs.onPrimary : cs.primary.withValues(alpha: 0.7),
           ),

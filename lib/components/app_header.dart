@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:pwa/components/app_logo.dart';
+import 'package:pwa/components/notification_bell.dart';
 import 'package:pwa/theme.dart';
 
 enum AppHeaderTone { light, dark }
@@ -70,6 +71,88 @@ class AppImpactHeader extends StatelessWidget implements PreferredSizeWidget {
   }
 }
 
+/// Top-right header buttons. Children run left to right, so the bell is the rightmost control.
+/// Order from the right: notification, add (when [onAdd] is set), admin (when the user is an admin).
+class AppHeaderActions extends StatelessWidget {
+  final Listenable auth;
+  final bool Function() isAdmin;
+  final VoidCallback onAdmin;
+  final VoidCallback? onAdd;
+
+  const AppHeaderActions({
+    super.key,
+    required this.auth,
+    required this.isAdmin,
+    required this.onAdmin,
+    this.onAdd,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: auth,
+      builder: (context, _) {
+        final showAdd = onAdd != null;
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (isAdmin()) ...[
+              _HeaderIconButton(
+                label: 'Admin dashboard',
+                icon: Icons.admin_panel_settings_outlined,
+                onTap: onAdmin,
+              ),
+              const SizedBox(width: 8),
+            ],
+            if (showAdd) ...[
+              _HeaderIconButton(
+                label: 'Add product',
+                icon: Icons.add,
+                onTap: onAdd!,
+              ),
+              const SizedBox(width: 8),
+            ],
+            const NotificationBellButton(),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _HeaderIconButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  const _HeaderIconButton({required this.label, required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: label,
+      child: Semantics(
+        button: true,
+        label: label,
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: cs.primary,
+              shape: BoxShape.circle,
+              border: Border.all(color: cs.primary.withValues(alpha: 0.22)),
+            ),
+            child: Icon(icon, size: 20, color: cs.onPrimary),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _HeaderTitlePill extends StatelessWidget {
   final AppHeaderTone tone;
   final String label;
@@ -86,6 +169,7 @@ class _HeaderTitlePill extends StatelessWidget {
     if (l == 'cart') return Icons.shopping_cart_outlined;
     if (l == 'invoice' || l == 'invoices') return Icons.receipt_long_outlined;
     if (l == 'account') return Icons.person_outline;
+    if (l.contains('notification')) return Icons.notifications_none_rounded;
     if (l.contains('scan')) return Icons.qr_code_scanner;
     if (l.contains('edit')) return Icons.edit_outlined;
     if (l.contains('new')) return Icons.add_circle_outline;

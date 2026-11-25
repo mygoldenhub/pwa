@@ -11,6 +11,7 @@ import 'package:pwa/utils/app_time.dart';
 
 enum AdminSection {
   users,
+  pricing,
   products,
   invoices,
   announcements;
@@ -19,6 +20,7 @@ enum AdminSection {
 
   String get label => switch (this) {
         AdminSection.users => 'User Management',
+        AdminSection.pricing => 'Customer Tiers & Pricing',
         AdminSection.products => 'Product Management',
         AdminSection.invoices => 'Invoice Management',
         AdminSection.announcements => 'Broadcast Announcements',
@@ -26,6 +28,7 @@ enum AdminSection {
 
   IconData get icon => switch (this) {
         AdminSection.users => Icons.group_outlined,
+        AdminSection.pricing => Icons.sell_outlined,
         AdminSection.products => Icons.inventory_2_outlined,
         AdminSection.invoices => Icons.receipt_long_outlined,
         AdminSection.announcements => Icons.campaign_outlined,
@@ -64,6 +67,8 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
   bool _posting = false;
   String? _error;
   String? _savingUserId;
+  String? _savingPricingId;
+  String? _savingPricingField;
   String? _formattingUserId;
   String? _removingUserId;
   String? _savingStatusUserId;
@@ -71,11 +76,13 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
   final Map<AdminSection, Object> _tokens = {};
 
   List<AdminUserRecord> _users = [];
+  List<AdminCustomerPricingRecord> _pricing = [];
   List<AdminProductRecord> _products = [];
   /// Sort column (display index) and direction per table; defaults match the original fixed order.
   final Map<AdminSection, ({int column, bool ascending})> _sorts = {
     // -1 = no column selected: newest sign-ups first, so new accounts awaiting approval are on top.
     AdminSection.users: (column: -1, ascending: false),
+    AdminSection.pricing: (column: 0, ascending: true),
     AdminSection.products: (column: 1, ascending: true),
     AdminSection.invoices: (column: 5, ascending: false),
   };
@@ -154,6 +161,17 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
           if (!_isCurrent(section, token)) return;
           if (await _retreatIfPageIsEmpty(section, token, page, result.total)) return;
           setState(() => _users = result.rows);
+          _rememberPage(section, query, page, result.total);
+        case AdminSection.pricing:
+          final result = await AdminDashboardService.listCustomerPricing(
+            page: page,
+            query: query,
+            sortColumn: sort.column < 0 ? 0 : sort.column,
+            ascending: sort.ascending,
+          );
+          if (!_isCurrent(section, token)) return;
+          if (await _retreatIfPageIsEmpty(section, token, page, result.total)) return;
+          setState(() => _pricing = result.rows);
           _rememberPage(section, query, page, result.total);
         case AdminSection.products:
           final result = await AdminDashboardService.listProducts(
@@ -244,6 +262,169 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       _pageIndex[section] = 0;
     });
     _ensureLoaded(section, force: true);
+  }
+
+  Widget _creditPlanControl(AdminCustomerPricingRecord row) {
+    final saving = _savingPricingId == row.id;
+    final selected = switch (row.creditPlan) {
+      5000 => 5000,
+      3000 => 3000,
+      _ => 1000,
+    };
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        DropdownButtonHideUnderline(
+          child: DropdownButton<int>(
+            value: selected,
+            isDense: true,
+            items: const [
+              DropdownMenuItem(value: 5000, child: Text('Gold (5000\$)')),
+              DropdownMenuItem(value: 3000, child: Text('Silver (3000\$)')),
+              DropdownMenuItem(value: 1000, child: Text('Bronze (1000\$)')),
+            ],
+            onChanged: saving
+                ? null
+                : (value) {
+                    if (value == null || value == selected) return;
+                    _savePricing(row, creditPlan: value.toString());
+                  },
+          ),
+        ),
+        if (saving && _savingPricingField == 'plan') ...[
+          const SizedBox(width: 8),
+          const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+        ],
+      ],
+    );
+  }
+
+  static const _invoiceTermChoices = ['7 days', '14 days', '30 days'];
+
+  String _pricingNumber(double value) {
+    if (value == value.roundToDouble()) return value.toInt().toString();
+    return value.toString();
+  }
+
+  String _invoiceTermsValue(String raw) {
+    final value = raw.trim().toLowerCase();
+    if (value == '14' || value == '14 days') return '14 days';
+    if (value == '30' || value == '30 days') return '30 days';
+    return '7 days';
+  }
+
+  Widget _invoiceTermsControl(AdminCustomerPricingRecord row) {
+    final saving = _savingPricingId == row.id;
+    final selected = _invoiceTermsValue(row.invoiceTerms);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        DropdownButtonHideUnderline(
+          child: DropdownButton<String>(
+            value: selected,
+            isDense: true,
+            items: const [
+              DropdownMenuItem(value: '7 days', child: Text('7 days')),
+              DropdownMenuItem(value: '14 days', child: Text('14 days')),
+              DropdownMenuItem(value: '30 days', child: Text('30 days')),
+            ],
+            onChanged: saving
+                ? null
+                : (value) {
+                    if (value == null || value == selected) return;
+                    _savePricing(row, invoiceTerms: value);
+                  },
+          ),
+        ),
+        if (saving && _savingPricingField == 'terms') ...[
+          const SizedBox(width: 8),
+          const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+        ],
+      ],
+    );
+  }
+
+  String _creditPlanLabel(double plan) {
+    return switch (plan) {
+      5000 => 'Gold (5000\$)',
+      3000 => 'Silver (3000\$)',
+      _ => 'Bronze (1000\$)',
+    };
+  }
+
+  Future<bool> _savePricing(
+    AdminCustomerPricingRecord row, {
+    String? creditPlan,
+    String? invoiceTerms,
+  }) async {
+    late final AdminCustomerPricingRecord next;
+    if (creditPlan != null) {
+      final parsed = double.tryParse(creditPlan.trim());
+      if (parsed == null || (parsed != 1000 && parsed != 3000 && parsed != 5000)) {
+        _pricingError('Choose Gold, Silver, or Bronze.');
+        return false;
+      }
+      if (parsed == row.creditPlan) return false;
+      next = row.copyWith(creditPlan: parsed);
+    } else if (invoiceTerms != null) {
+      if (!_invoiceTermChoices.contains(invoiceTerms)) {
+        _pricingError('Choose 7 days, 14 days, or 30 days.');
+        return false;
+      }
+      if (invoiceTerms == row.invoiceTerms) return false;
+      next = row.copyWith(invoiceTerms: invoiceTerms);
+    } else {
+      return true;
+    }
+
+    final field = creditPlan != null ? 'plan' : 'terms';
+    setState(() {
+      _savingPricingId = row.id;
+      _savingPricingField = field;
+    });
+    try {
+      await AdminDashboardService.saveCustomerPricing(next);
+      if (!mounted) return true;
+      final who = row.displayName == '—' ? row.email : row.displayName;
+      final notice = field == 'plan'
+          ? "$who's credit plan is now ${_creditPlanLabel(next.creditPlan)}."
+          : "$who's invoice terms are now ${next.invoiceTerms}.";
+      setState(() {
+        _pricing = [for (final item in _pricing) if (item.id == row.id) next else item];
+        if (_savingPricingId == row.id) {
+          _savingPricingId = null;
+          _savingPricingField = null;
+        }
+      });
+      _pricingNotice(notice);
+      return true;
+    } catch (e) {
+      if (mounted) _pricingError(_message(e));
+      return false;
+    } finally {
+      if (mounted && _savingPricingId == row.id) {
+        setState(() {
+          _savingPricingId = null;
+          _savingPricingField = null;
+        });
+      }
+    }
+  }
+
+  void _pricingNotice(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        behavior: SnackBarBehavior.floating,
+        showCloseIcon: true,
+        content: Text(message),
+      ));
+  }
+
+  void _pricingError(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   void _openProduct(AdminProductRecord product) {
@@ -727,6 +908,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
   List<String> _columnLabels() {
     return switch (_section) {
       AdminSection.users => const ['Name', 'Email', 'Company', 'Phone', 'Role', 'Status', 'Password', 'Account'],
+      AdminSection.pricing => const ['Name', 'Email', 'Company', 'Credit plan', 'Credit used', 'Invoice terms'],
       AdminSection.products => const ['Code', 'Name', 'On hand', 'Price', 'Updated'],
       AdminSection.invoices => const ['Number', 'Customer', 'Status', 'Total', 'Due', 'Issued'],
       AdminSection.announcements => const [],
@@ -748,6 +930,18 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
               _statusControl(user, isSelf: user.id == currentId),
               _formatPasswordButton(user, isSelf: user.id == currentId),
               _removeAccountButton(user, isSelf: user.id == currentId),
+            ],
+        ];
+      case AdminSection.pricing:
+        return [
+          for (final row in _pricing)
+            [
+              Text(row.displayName),
+              Text(row.email),
+              Text(row.companyName),
+              _creditPlanControl(row),
+              Text(_pricingNumber(row.creditUsed)),
+              _invoiceTermsControl(row),
             ],
         ];
       case AdminSection.products:
@@ -1567,68 +1761,75 @@ class _AnnouncementCard extends StatelessWidget {
           side: BorderSide(color: cs.outline.withValues(alpha: 0.10)),
         ),
         clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: () => _showAnnouncementDetail(context, item, audience, onDelete),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 14, 4, 14),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: cs.primary.withValues(alpha: 0.10),
-                    borderRadius: BorderRadius.circular(AppRadius.md),
-                  ),
-                  child: Icon(Icons.campaign_rounded, size: 22, color: cs.primary),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+        child: Stack(
+          children: [
+            InkWell(
+              onTap: () => _showAnnouncementDetail(context, item, audience, onDelete),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 14, 84, 14),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: cs.primary.withValues(alpha: 0.10),
+                        borderRadius: BorderRadius.circular(AppRadius.md),
+                      ),
+                      child: Icon(Icons.campaign_rounded, size: 22, color: cs.primary),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Expanded(
-                            child: Text(
-                              title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700, height: 1.2),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
                           Text(
-                            _announcementWhen(item.createdAt),
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: cs.onSurfaceVariant,
-                              fontWeight: FontWeight.w600,
-                            ),
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700, height: 1.2),
                           ),
+                          const SizedBox(height: 6),
+                          Text(
+                            item.body.trim().isEmpty ? 'No message' : item.body.trim(),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant, height: 1.35),
+                          ),
+                          const SizedBox(height: 10),
+                          _AudienceChip(label: audience, everyone: everyone),
                         ],
                       ),
-                      const SizedBox(height: 6),
-                      Text(
-                        item.body.trim().isEmpty ? 'No message' : item.body.trim(),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant, height: 1.35),
-                      ),
-                      const SizedBox(height: 10),
-                      _AudienceChip(label: audience, everyone: everyone),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-                IconButton(
-                  tooltip: 'Delete',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: onDelete,
-                  icon: Icon(Icons.delete_outline_rounded, size: 20, color: cs.error.withValues(alpha: 0.85)),
-                ),
-              ],
+              ),
             ),
-          ),
+            Positioned(
+              top: 14,
+              right: 12,
+              child: Text(
+                _announcementWhen(item.createdAt),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: cs.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            Positioned(
+              right: 2,
+              bottom: 2,
+              child: IconButton(
+                tooltip: 'Delete',
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                onPressed: onDelete,
+                icon: Icon(Icons.delete_outline_rounded, size: 20, color: cs.error.withValues(alpha: 0.85)),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -2453,6 +2654,15 @@ String _message(Object error) {
   }
   if (lower.contains('status') && lower.contains('column')) {
     return 'User status is not set up yet. Run supabase/migrations/0008_users_status.sql in the Supabase SQL editor.';
+  }
+  if (lower.contains('credit_used')) {
+    return 'Credit used is not set up yet. Run supabase/migrations/0018_users_credit_used.sql in the Supabase SQL editor.';
+  }
+  if (lower.contains('discount_level')) {
+    return 'Discount level has been removed. Run supabase/migrations/0020_drop_discount_level.sql in the Supabase SQL editor.';
+  }
+  if (lower.contains('credit_plan') || lower.contains('invoice_terms') || lower.contains('customer_pricing')) {
+    return 'Customer pricing is not set up yet. Run supabase/migrations/0017_customer_pricing.sql in the Supabase SQL editor.';
   }
   if (lower.contains('row-level security') || lower.contains('permission') || lower.contains('announcements')) {
     text = '$text Run supabase/migrations/0006_admin_access.sql in the Supabase SQL editor.';

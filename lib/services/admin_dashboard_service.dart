@@ -48,6 +48,41 @@ class AdminUserRecord {
   }
 }
 
+class AdminCustomerPricingRecord {
+  final String id;
+  final String email;
+  final String displayName;
+  final String companyName;
+  final double creditPlan;
+  final double creditUsed;
+  final String invoiceTerms;
+
+  const AdminCustomerPricingRecord({
+    required this.id,
+    required this.email,
+    required this.displayName,
+    required this.companyName,
+    required this.creditPlan,
+    this.creditUsed = 0,
+    required this.invoiceTerms,
+  });
+
+  AdminCustomerPricingRecord copyWith({
+    double? creditPlan,
+    String? invoiceTerms,
+  }) {
+    return AdminCustomerPricingRecord(
+      id: id,
+      email: email,
+      displayName: displayName,
+      companyName: companyName,
+      creditPlan: creditPlan ?? this.creditPlan,
+      creditUsed: creditUsed,
+      invoiceTerms: invoiceTerms ?? this.invoiceTerms,
+    );
+  }
+}
+
 class AdminProductRecord {
   final String id;
   final String code;
@@ -153,6 +188,54 @@ class AdminDashboardService {
       }
     }
     throw lastError ?? 'Unable to load users.';
+  }
+
+  /// [sortColumn] indexes Name, Email, Company, Credit plan, Credit used, Invoice terms.
+  static Future<AdminPage<AdminCustomerPricingRecord>> listCustomerPricing({
+    required int page,
+    String query = '',
+    int sortColumn = 0,
+    bool ascending = true,
+  }) async {
+    const columns = ['display_name', 'email', 'company_name', 'credit_plan', 'credit_used', 'invoice_terms'];
+    try {
+      final result = await _fetchPage(
+        table: 'users',
+        select: 'id, display_name, email, company_name, credit_plan, credit_used, invoice_terms',
+        orderBy: _pick(columns, sortColumn),
+        ascending: ascending,
+        tieBreaker: 'id',
+        page: page,
+        orFilter: _orIlike(query, const ['display_name', 'email', 'company_name']),
+      );
+      return AdminPage(rows: result.rows.map(_pricingFromRow).toList(), total: result.total);
+    } catch (e) {
+      if (!_missingColumn(e) || !e.toString().toLowerCase().contains('credit_used')) rethrow;
+      final fallbackColumns = ['display_name', 'email', 'company_name', 'credit_plan', 'credit_plan', 'invoice_terms'];
+      final result = await _fetchPage(
+        table: 'users',
+        select: 'id, display_name, email, company_name, credit_plan, invoice_terms',
+        orderBy: _pick(fallbackColumns, sortColumn),
+        ascending: ascending,
+        tieBreaker: 'id',
+        page: page,
+        orFilter: _orIlike(query, const ['display_name', 'email', 'company_name']),
+      );
+      return AdminPage(rows: result.rows.map(_pricingFromRow).toList(), total: result.total);
+    }
+  }
+
+  /// Updates pricing columns on the user's own row.
+  static Future<void> saveCustomerPricing(AdminCustomerPricingRecord row) async {
+    await SupabaseService.update(
+      'users',
+      {
+        'credit_plan': row.creditPlan,
+        'invoice_terms': row.invoiceTerms,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      },
+      filters: {'id': row.id},
+    );
   }
 
   /// Allows (1) or blocks (0) a user's login. Only admins can change it (enforced in the database).
@@ -526,6 +609,23 @@ class AdminDashboardService {
     if (cleaned.isEmpty || columns.isEmpty) return null;
     final pattern = '"%$cleaned%"';
     return columns.map((column) => '$column.ilike.$pattern').join(',');
+  }
+
+  static AdminCustomerPricingRecord _pricingFromRow(Map<String, dynamic> row) {
+    return AdminCustomerPricingRecord(
+      id: _text(row['id']),
+      email: _text(row['email'], fallback: '—'),
+      displayName: _text(row['display_name'], fallback: '—'),
+      companyName: _text(row['company_name'], fallback: '—'),
+      creditPlan: _double(row['credit_plan'], 1000),
+      creditUsed: _double(row['credit_used'], 0),
+      invoiceTerms: _text(row['invoice_terms'], fallback: '7 days'),
+    );
+  }
+
+  static double _double(dynamic value, double fallback) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '') ?? fallback;
   }
 
   static AdminUserRecord _userFromRow(Map<String, dynamic> row) {

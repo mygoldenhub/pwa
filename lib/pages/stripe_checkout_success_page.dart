@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pwa/nav.dart';
 import 'package:pwa/services/cart_service.dart';
+import 'package:pwa/services/credit_service.dart';
 import 'package:pwa/services/invoice_webhook_service.dart';
 import 'package:pwa/services/pending_invoice_storage.dart';
 import 'package:pwa/services/pending_invoice_payment_storage.dart';
@@ -126,18 +127,32 @@ class _StripeCheckoutSuccessPageState extends State<StripeCheckoutSuccessPage> {
 
     final payload = await PendingInvoicePaymentStorage.load();
     if (payload == null) return false;
-    // Discount saved by the Pay now flow (local only, never sent to Make).
+    // Local-only values. Removed before the payload is posted to Make.
     final savedDiscount = payload.remove(PendingInvoicePaymentStorage.discountKey);
+    final savedPay = payload.remove(PendingInvoicePaymentStorage.payAmountKey);
+    final makeDone = payload.remove(PendingInvoicePaymentStorage.makeDoneKey) == true;
+    final payAmount = savedPay is num ? savedPay.toDouble() : double.tryParse(savedPay?.toString() ?? '');
 
     setState(() => _postingPayment = true);
     try {
-      final res = await InvoiceWebhookService.submitInvoicePayload(payload, markPaid: true);
+      InvoiceWebhookResult? res;
+      if (!makeDone) {
+        res = await InvoiceWebhookService.submitInvoicePayload(payload, markPaid: true);
+        await PendingInvoicePaymentStorage.save({
+          ...payload,
+          PendingInvoicePaymentStorage.makeDoneKey: true,
+          if (payAmount != null) PendingInvoicePaymentStorage.payAmountKey: payAmount,
+        });
+      }
+      if (payAmount != null && payAmount > 0) {
+        await CreditService.recordPayment(payAmount);
+      }
       final fromPayload =
           (payload['invoice_id'] ?? payload['invoiceId'] ?? payload['invoiceID'])?.toString().trim();
-      final invoiceId = (res.invoiceId?.trim().isNotEmpty ?? false) ? res.invoiceId!.trim() : fromPayload;
+      final invoiceId = (res?.invoiceId?.trim().isNotEmpty ?? false) ? res!.invoiceId!.trim() : fromPayload;
       _postedPayment = true;
       _paidInvoiceId = (invoiceId == null || invoiceId.isEmpty) ? null : invoiceId;
-      _paidDiscountPercent = res.discountPercent ??
+      _paidDiscountPercent = res?.discountPercent ??
           (savedDiscount is num ? savedDiscount.toDouble() : double.tryParse(savedDiscount?.toString() ?? ''));
 
       await PendingInvoicePaymentStorage.clear();
